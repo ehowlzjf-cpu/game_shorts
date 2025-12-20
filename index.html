@@ -184,6 +184,10 @@
             if (!audioCtx) {
                 audioCtx = new (window.AudioContext || window.webkitAudioContext)();
             }
+            // iOS Safari는 resume 필요
+            if (audioCtx.state === 'suspended') {
+                audioCtx.resume();
+            }
         }
 
         // 음 재생 (실로폰/마림바 느낌)
