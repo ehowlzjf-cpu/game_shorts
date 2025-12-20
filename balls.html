@@ -249,29 +249,29 @@ class Ball {
         this.radius = BALL_RADIUS;
         this.hits = 0;
         this.dead = false;
-        this.justSplit = false; // 분열 직후 플래그
-        this.splitCooldown = 0;
+        this.justSplit = false;
+        this.wallCooldown = 0; // 벽 충돌 쿨다운
     }
 
     update() {
         this.x += this.vx;
         this.y += this.vy;
 
-        if (this.splitCooldown > 0) this.splitCooldown--;
+        if (this.wallCooldown > 0) this.wallCooldown--;
 
         // 벽 충돌 체크
         const dx = this.x - ARENA.x;
         const dy = this.y - ARENA.y;
         const dist = Math.sqrt(dx * dx + dy * dy);
 
-        if (dist + this.radius > ARENA.radius && this.splitCooldown === 0) {
-            // 벽에 닿음 - 반사 + 분열
+        // 벽에 닿았는지 체크
+        if (dist + this.radius > ARENA.radius) {
             const nx = dx / dist;
             const ny = dy / dist;
 
-            // 위치 보정
-            this.x = ARENA.x + nx * (ARENA.radius - this.radius - 1);
-            this.y = ARENA.y + ny * (ARENA.radius - this.radius - 1);
+            // 위치 보정 (벽 안쪽으로)
+            this.x = ARENA.x + nx * (ARENA.radius - this.radius - 2);
+            this.y = ARENA.y + ny * (ARENA.radius - this.radius - 2);
 
             // 반사
             const dot = this.vx * nx + this.vy * ny;
@@ -281,10 +281,13 @@ class Ball {
             // 속력 정규화
             this.normalizeSpeed();
 
-            // 분열
-            this.justSplit = true;
-            this.splitCooldown = 30;
-            playSplitSound(this.colorIndex);
+            // 분열 (쿨다운 없을 때만)
+            if (this.wallCooldown === 0) {
+                this.justSplit = true;
+                playSplitSound(this.colorIndex);
+            }
+
+            this.wallCooldown = 10; // 짧은 쿨다운 (같은 벽 연속 충돌 방지)
         }
     }
 
@@ -434,18 +437,25 @@ function handleSplits() {
         if (ball.justSplit && !ball.dead) {
             ball.justSplit = false;
 
-            // 새 공 생성 (살짝 다른 방향)
+            // 새 공 생성 (반대쪽으로)
             const angle = Math.atan2(ball.vy, ball.vx);
-            const newAngle = angle + (Math.random() - 0.5) * Math.PI / 2;
+            const newAngle = angle + Math.PI + (Math.random() - 0.5) * 0.5;
+
+            // 새 공은 중심 방향으로 살짝 이동
+            const dx = ball.x - ARENA.x;
+            const dy = ball.y - ARENA.y;
+            const dist = Math.sqrt(dx * dx + dy * dy);
+            const pushX = -(dx / dist) * 15;
+            const pushY = -(dy / dist) * 15;
 
             const newBall = new Ball(
-                ball.x,
-                ball.y,
+                ball.x + pushX,
+                ball.y + pushY,
                 Math.cos(newAngle) * BALL_SPEED,
                 Math.sin(newAngle) * BALL_SPEED,
                 ball.colorIndex
             );
-            newBall.splitCooldown = 30;
+            newBall.wallCooldown = 15; // 새 공도 잠시 쿨다운
             newBalls.push(newBall);
         }
     });
