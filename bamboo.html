@@ -1,0 +1,595 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Shishi-odoshi</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            background: #1a1a1a;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            overflow: hidden;
+        }
+        #game-container {
+            position: relative;
+            width: 360px;
+            height: 640px;
+            overflow: hidden;
+        }
+        canvas { display: block; }
+        #start-screen {
+            position: absolute;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+            background: rgba(0,0,0,0.8);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+        #start-text {
+            font-family: 'Georgia', serif;
+            font-size: 20px;
+            color: #a8e6cf;
+            letter-spacing: 4px;
+            animation: fade 2s ease-in-out infinite;
+        }
+        @keyframes fade {
+            0%, 100% { opacity: 0.4; }
+            50% { opacity: 1; }
+        }
+    </style>
+</head>
+<body>
+    <div id="game-container">
+        <canvas id="canvas"></canvas>
+        <div id="start-screen">
+            <div id="start-text">TAP</div>
+        </div>
+    </div>
+
+<script>
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+const W = 360, H = 640;
+canvas.width = W;
+canvas.height = H;
+
+let audioCtx = null;
+let running = false;
+
+// 색상
+const COLORS = {
+    bg: '#2d4a3e',
+    bgGradient: '#1a2f27',
+    bamboo: '#8fbc8f',
+    bambooDark: '#6b8e6b',
+    water: '#87ceeb',
+    waterDark: '#5cacee',
+    stone: '#696969',
+    stoneDark: '#4a4a4a'
+};
+
+// ========== AUDIO ==========
+
+function initAudio() {
+    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+}
+
+// 물 흐르는 소리 (지속적인 노이즈)
+let waterNoiseNode = null;
+function startWaterSound() {
+    if (!audioCtx || waterNoiseNode) return;
+
+    const bufferSize = audioCtx.sampleRate * 2;
+    const buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
+    const data = buffer.getChannelData(0);
+    for (let i = 0; i < bufferSize; i++) {
+        data[i] = Math.random() * 2 - 1;
+    }
+
+    waterNoiseNode = audioCtx.createBufferSource();
+    waterNoiseNode.buffer = buffer;
+    waterNoiseNode.loop = true;
+
+    const filter = audioCtx.createBiquadFilter();
+    filter.type = 'lowpass';
+    filter.frequency.value = 400;
+
+    const gain = audioCtx.createGain();
+    gain.gain.value = 0.08;
+
+    waterNoiseNode.connect(filter);
+    filter.connect(gain);
+    gain.connect(audioCtx.destination);
+    waterNoiseNode.start();
+}
+
+// 물 쏟아지는 소리 (랜덤 변형)
+function playWaterPour() {
+    if (!audioCtx) return;
+
+    const duration = 0.3 + Math.random() * 0.2; // 0.3-0.5초
+    const bufferSize = audioCtx.sampleRate * duration;
+    const buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
+    const data = buffer.getChannelData(0);
+    for (let i = 0; i < bufferSize; i++) {
+        const env = Math.exp(-i / (bufferSize * 0.3));
+        data[i] = (Math.random() * 2 - 1) * env;
+    }
+
+    const source = audioCtx.createBufferSource();
+    source.buffer = buffer;
+
+    const filter = audioCtx.createBiquadFilter();
+    filter.type = 'bandpass';
+    filter.frequency.value = 600 + Math.random() * 400; // 600-1000Hz 랜덤
+    filter.Q.value = 0.3 + Math.random() * 0.4;
+
+    const gain = audioCtx.createGain();
+    gain.gain.value = 0.2 + Math.random() * 0.1;
+
+    source.connect(filter);
+    filter.connect(gain);
+    gain.connect(audioCtx.destination);
+    source.start();
+}
+
+// 대나무 부딪히는 소리 (딱!) - 피치 랜덤
+function playBambooHit(pitchMult = 1) {
+    if (!audioCtx) return;
+
+    // 톤 (피치 랜덤)
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+
+    const baseFreq = 600 + Math.random() * 400; // 600-1000Hz 랜덤
+    osc.type = 'triangle';
+    osc.frequency.setValueAtTime(baseFreq * pitchMult, audioCtx.currentTime);
+    osc.frequency.exponentialRampToValueAtTime(150 * pitchMult, audioCtx.currentTime + 0.1);
+
+    gain.gain.setValueAtTime(0.5, audioCtx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.15);
+
+    osc.connect(gain);
+    gain.connect(audioCtx.destination);
+    osc.start();
+    osc.stop(audioCtx.currentTime + 0.15);
+
+    // 클릭음
+    const clickBuf = audioCtx.createBuffer(1, audioCtx.sampleRate * 0.05, audioCtx.sampleRate);
+    const clickData = clickBuf.getChannelData(0);
+    for (let i = 0; i < clickData.length; i++) {
+        clickData[i] = (Math.random() * 2 - 1) * Math.exp(-i / 500);
+    }
+
+    const click = audioCtx.createBufferSource();
+    click.buffer = clickBuf;
+
+    const clickFilter = audioCtx.createBiquadFilter();
+    clickFilter.type = 'highpass';
+    clickFilter.frequency.value = 1500 + Math.random() * 1000;
+
+    const clickGain = audioCtx.createGain();
+    clickGain.gain.value = 0.3;
+
+    click.connect(clickFilter);
+    clickFilter.connect(clickGain);
+    clickGain.connect(audioCtx.destination);
+    click.start();
+}
+
+// 새소리 (랜덤하게)
+function playBirdSound() {
+    if (!audioCtx) return;
+
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+
+    osc.type = 'sine';
+    const baseFreq = 2000 + Math.random() * 1000;
+    osc.frequency.setValueAtTime(baseFreq, audioCtx.currentTime);
+    osc.frequency.linearRampToValueAtTime(baseFreq * 1.2, audioCtx.currentTime + 0.1);
+    osc.frequency.linearRampToValueAtTime(baseFreq * 0.9, audioCtx.currentTime + 0.2);
+
+    gain.gain.setValueAtTime(0, audioCtx.currentTime);
+    gain.gain.linearRampToValueAtTime(0.05, audioCtx.currentTime + 0.02);
+    gain.gain.linearRampToValueAtTime(0, audioCtx.currentTime + 0.25);
+
+    osc.connect(gain);
+    gain.connect(audioCtx.destination);
+    osc.start();
+    osc.stop(audioCtx.currentTime + 0.25);
+}
+
+// ========== SHISHI-ODOSHI (대나무 물레방아) ==========
+
+class Shishiodoshi {
+    constructor(x, y, size, speed) {
+        this.x = x;
+        this.y = y;
+        this.size = size;
+        this.speed = speed;
+
+        this.angle = -0.3; // 시작 각도 (물 받는 중)
+        this.waterLevel = Math.random() * 50; // 랜덤 초기 물양
+        this.maxWater = 80 + Math.random() * 40; // 80-120 랜덤
+        this.filling = true;
+        this.tipping = false;
+        this.returning = false;
+
+        this.pivotX = x;
+        this.pivotY = y;
+        this.length = size * 2;
+        this.thickness = size * 0.3;
+
+        // 피치 (크기에 따라 - 큰게 낮은 소리)
+        this.pitchMult = 1.3 - (size / 60);
+
+        // 물방울 파티클
+        this.droplets = [];
+    }
+
+    update() {
+        if (this.filling) {
+            this.waterLevel += this.speed;
+
+            if (this.waterLevel >= this.maxWater) {
+                this.filling = false;
+                this.tipping = true;
+            }
+        }
+
+        if (this.tipping) {
+            this.angle += 0.08;
+
+            if (this.angle > 0.5) {
+                // 물 쏟기
+                playWaterPour();
+                this.spawnDroplets();
+                this.waterLevel = 0;
+                this.tipping = false;
+                this.returning = true;
+            }
+        }
+
+        if (this.returning) {
+            this.angle -= 0.12;
+
+            if (this.angle <= -0.3) {
+                this.angle = -0.3;
+                this.returning = false;
+                this.filling = true;
+                playBambooHit(this.pitchMult);
+            }
+        }
+
+        // 물방울 업데이트
+        this.droplets.forEach(d => {
+            d.vy += 0.3;
+            d.x += d.vx;
+            d.y += d.vy;
+            d.life -= 1;
+        });
+        this.droplets = this.droplets.filter(d => d.life > 0 && d.y < H);
+    }
+
+    spawnDroplets() {
+        const tipX = this.pivotX + Math.cos(this.angle) * this.length;
+        const tipY = this.pivotY + Math.sin(this.angle) * this.length;
+
+        for (let i = 0; i < 15; i++) {
+            this.droplets.push({
+                x: tipX + (Math.random() - 0.5) * 20,
+                y: tipY,
+                vx: (Math.random() - 0.5) * 3 + 2,
+                vy: -Math.random() * 3,
+                size: 3 + Math.random() * 4,
+                life: 60
+            });
+        }
+    }
+
+    draw() {
+        ctx.save();
+        ctx.translate(this.pivotX, this.pivotY);
+        ctx.rotate(this.angle);
+
+        // 대나무 본체
+        ctx.fillStyle = COLORS.bamboo;
+        ctx.beginPath();
+        ctx.roundRect(-this.length * 0.3, -this.thickness / 2, this.length * 1.3, this.thickness, 5);
+        ctx.fill();
+
+        // 대나무 마디
+        ctx.strokeStyle = COLORS.bambooDark;
+        ctx.lineWidth = 2;
+        for (let i = 0; i < 3; i++) {
+            const x = -this.length * 0.2 + i * this.length * 0.4;
+            ctx.beginPath();
+            ctx.moveTo(x, -this.thickness / 2);
+            ctx.lineTo(x, this.thickness / 2);
+            ctx.stroke();
+        }
+
+        // 물 (안에 차있는)
+        if (this.waterLevel > 0) {
+            const waterWidth = (this.waterLevel / this.maxWater) * this.length * 0.4;
+            ctx.fillStyle = COLORS.water;
+            ctx.globalAlpha = 0.7;
+            ctx.beginPath();
+            ctx.ellipse(this.length * 0.5, 0, waterWidth, this.thickness * 0.3, 0, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.globalAlpha = 1;
+        }
+
+        ctx.restore();
+
+        // 피벗 (받침대)
+        ctx.fillStyle = COLORS.bambooDark;
+        ctx.beginPath();
+        ctx.arc(this.pivotX, this.pivotY, 8, 0, Math.PI * 2);
+        ctx.fill();
+
+        // 물방울 그리기
+        this.droplets.forEach(d => {
+            ctx.fillStyle = COLORS.water;
+            ctx.globalAlpha = d.life / 60;
+            ctx.beginPath();
+            ctx.arc(d.x, d.y, d.size, 0, Math.PI * 2);
+            ctx.fill();
+        });
+        ctx.globalAlpha = 1;
+    }
+}
+
+// ========== 씬 오브젝트 ==========
+
+let shishis = [];
+let waterStream = [];
+let ripples = [];
+let stones = [];
+
+function createScene() {
+    // 2-5개 랜덤 대나무
+    const count = 2 + Math.floor(Math.random() * 4);
+    shishis = [];
+
+    // 위치 분배
+    const usedY = [];
+
+    for (let i = 0; i < count; i++) {
+        // Y 위치: 200-520 사이에 분산 (겹치지 않게)
+        let y;
+        let attempts = 0;
+        do {
+            y = 200 + Math.random() * 320;
+            attempts++;
+        } while (usedY.some(uy => Math.abs(uy - y) < 70) && attempts < 20);
+        usedY.push(y);
+
+        // X 위치: 좌우 번갈아가며
+        const x = (i % 2 === 0) ? 80 + Math.random() * 80 : 200 + Math.random() * 80;
+
+        // 크기: 30-50
+        const size = 30 + Math.random() * 20;
+
+        // 속도: 0.3-1.0
+        const speed = 0.3 + Math.random() * 0.7;
+
+        shishis.push(new Shishiodoshi(x, y, size, speed));
+    }
+
+    // Y 순서로 정렬 (위에서 아래로)
+    shishis.sort((a, b) => a.y - b.y);
+
+    // 랜덤 돌 생성
+    stones = [];
+    const stoneCount = 4 + Math.floor(Math.random() * 4);
+    for (let i = 0; i < stoneCount; i++) {
+        stones.push({
+            x: 30 + Math.random() * 300,
+            y: H - 40 - Math.random() * 30,
+            size: 20 + Math.random() * 30
+        });
+    }
+}
+
+// 물줄기 파티클
+function updateWaterStream() {
+    // 상단에서 물 흘러내림
+    if (Math.random() < 0.3) {
+        waterStream.push({
+            x: 80 + Math.random() * 40,
+            y: 50,
+            vy: 2 + Math.random(),
+            size: 2 + Math.random() * 2,
+            life: 200
+        });
+    }
+
+    // 첫 번째 대나무 위치
+    const firstShishi = shishis[0];
+    const targetY = firstShishi ? firstShishi.y : 280;
+    const targetX = firstShishi ? firstShishi.x : 120;
+
+    waterStream.forEach(w => {
+        w.y += w.vy;
+        w.vy += 0.1;
+        w.life--;
+
+        // 첫 번째 대나무에 닿으면
+        if (w.y > targetY - 30 && w.y < targetY + 10 &&
+            w.x > targetX - 40 && w.x < targetX + 40) {
+            w.life = 0;
+        }
+    });
+
+    waterStream = waterStream.filter(w => w.life > 0 && w.y < H);
+}
+
+// 물결 효과
+function addRipple(x, y) {
+    ripples.push({
+        x, y,
+        radius: 5,
+        maxRadius: 30 + Math.random() * 20,
+        life: 1
+    });
+}
+
+function updateRipples() {
+    ripples.forEach(r => {
+        r.radius += 1;
+        r.life -= 0.02;
+    });
+    ripples = ripples.filter(r => r.life > 0);
+}
+
+// ========== 렌더링 ==========
+
+function drawBackground() {
+    // 그라데이션 배경
+    const gradient = ctx.createLinearGradient(0, 0, 0, H);
+    gradient.addColorStop(0, COLORS.bg);
+    gradient.addColorStop(1, COLORS.bgGradient);
+    ctx.fillStyle = gradient;
+    ctx.fillRect(0, 0, W, H);
+
+    // 물 (하단)
+    ctx.fillStyle = COLORS.waterDark;
+    ctx.globalAlpha = 0.6;
+    ctx.fillRect(0, H - 100, W, 100);
+    ctx.globalAlpha = 1;
+
+    // 랜덤 돌
+    stones.forEach(s => drawStone(s.x, s.y, s.size));
+}
+
+function drawStone(x, y, size) {
+    ctx.fillStyle = COLORS.stone;
+    ctx.beginPath();
+    ctx.ellipse(x, y, size, size * 0.6, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = COLORS.stoneDark;
+    ctx.beginPath();
+    ctx.ellipse(x + size * 0.2, y + size * 0.1, size * 0.3, size * 0.2, 0.3, 0, Math.PI * 2);
+    ctx.fill();
+}
+
+function drawWaterStream() {
+    ctx.fillStyle = COLORS.water;
+    waterStream.forEach(w => {
+        ctx.globalAlpha = 0.7;
+        ctx.beginPath();
+        ctx.arc(w.x, w.y, w.size, 0, Math.PI * 2);
+        ctx.fill();
+    });
+    ctx.globalAlpha = 1;
+}
+
+function drawRipples() {
+    ripples.forEach(r => {
+        ctx.strokeStyle = COLORS.water;
+        ctx.globalAlpha = r.life * 0.5;
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(r.x, r.y, r.radius, 0, Math.PI * 2);
+        ctx.stroke();
+    });
+    ctx.globalAlpha = 1;
+}
+
+function drawWaterSource() {
+    // 상단 대나무 물줄기
+    ctx.fillStyle = COLORS.bamboo;
+    ctx.fillRect(70, 20, 60, 15);
+    ctx.fillRect(70, 20, 15, 40);
+
+    // 물 나오는 곳
+    ctx.fillStyle = COLORS.water;
+    ctx.globalAlpha = 0.8;
+    ctx.beginPath();
+    ctx.moveTo(85, 55);
+    ctx.lineTo(95, 55);
+    ctx.lineTo(90, 80);
+    ctx.closePath();
+    ctx.fill();
+    ctx.globalAlpha = 1;
+}
+
+function draw() {
+    drawBackground();
+    drawWaterSource();
+    drawWaterStream();
+
+    shishis.forEach(s => {
+        s.update();
+        s.draw();
+
+        // 물방울이 바닥에 닿으면 물결
+        s.droplets.forEach(d => {
+            if (d.y > H - 100 && d.vy > 0) {
+                addRipple(d.x, H - 80);
+                d.vy = 0;
+            }
+        });
+    });
+
+    drawRipples();
+    updateWaterStream();
+    updateRipples();
+}
+
+function loop() {
+    if (!running) return;
+    draw();
+    requestAnimationFrame(loop);
+}
+
+// ========== 새소리 랜덤 ==========
+
+function scheduleBirdSounds() {
+    if (!running) return;
+
+    const delay = 3000 + Math.random() * 5000;
+    setTimeout(() => {
+        if (running) {
+            playBirdSound();
+            scheduleBirdSounds();
+        }
+    }, delay);
+}
+
+// ========== INIT ==========
+
+function start() {
+    document.getElementById('start-screen').style.display = 'none';
+    initAudio();
+    running = true;
+
+    createScene();
+    startWaterSound();
+    scheduleBirdSounds();
+
+    loop();
+}
+
+function init() {
+    ctx.fillStyle = '#1a2f27';
+    ctx.fillRect(0, 0, W, H);
+
+    const ss = document.getElementById('start-screen');
+    ss.addEventListener('click', () => { if (!running) start(); });
+    ss.addEventListener('touchstart', () => { if (!running) start(); });
+}
+
+window.onload = init;
+</script>
+</body>
+</html>
