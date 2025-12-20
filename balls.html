@@ -1,0 +1,583 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ball Battle</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            background: #000;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            overflow: hidden;
+        }
+        #game-container {
+            position: relative;
+            width: 360px;
+            height: 640px;
+            overflow: hidden;
+        }
+        canvas { display: block; }
+        #start-screen {
+            position: absolute;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+            background: rgba(0,0,0,0.8);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 10;
+        }
+        #start-text {
+            font-family: 'Arial', sans-serif;
+            font-size: 24px;
+            color: #fff;
+            letter-spacing: 4px;
+            animation: pulse 1.5s ease-in-out infinite;
+        }
+        @keyframes pulse {
+            0%, 100% { opacity: 0.5; transform: scale(1); }
+            50% { opacity: 1; transform: scale(1.1); }
+        }
+        #scoreboard {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            right: 10px;
+            display: flex;
+            justify-content: space-around;
+            font-family: 'Arial', sans-serif;
+            font-size: 14px;
+            font-weight: bold;
+            z-index: 5;
+        }
+        .score {
+            padding: 5px 10px;
+            border-radius: 15px;
+            color: #000;
+        }
+        #winner-screen {
+            position: absolute;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+            background: rgba(0,0,0,0.85);
+            display: none;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            z-index: 20;
+        }
+        #winner-text {
+            font-family: 'Arial', sans-serif;
+            font-size: 28px;
+            color: #fff;
+            margin-bottom: 20px;
+        }
+        #winner-color {
+            width: 80px;
+            height: 80px;
+            border-radius: 50%;
+            margin-bottom: 30px;
+            animation: winPulse 0.5s ease-in-out infinite;
+        }
+        @keyframes winPulse {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.2); }
+        }
+    </style>
+</head>
+<body>
+    <div id="game-container">
+        <canvas id="canvas"></canvas>
+        <div id="scoreboard">
+            <div class="score" id="score0" style="background:#ff6b6b;">0</div>
+            <div class="score" id="score1" style="background:#4ecdc4;">0</div>
+            <div class="score" id="score2" style="background:#ffe66d;">0</div>
+            <div class="score" id="score3" style="background:#a29bfe;">0</div>
+        </div>
+        <div id="start-screen">
+            <div id="start-text">TAP TO START</div>
+        </div>
+        <div id="winner-screen">
+            <div id="winner-text">WINNER!</div>
+            <div id="winner-color"></div>
+        </div>
+    </div>
+
+<script>
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+const W = 360, H = 640;
+canvas.width = W;
+canvas.height = H;
+
+// 경기장 설정
+const ARENA = {
+    x: W / 2,
+    y: H / 2,
+    radius: 150
+};
+
+// 공 색상
+const COLORS = ['#ff6b6b', '#4ecdc4', '#ffe66d', '#a29bfe'];
+const BALL_RADIUS = 8;
+const BALL_SPEED = 3;
+const WIN_COUNT = 100;
+const MAX_HITS = 3;
+
+let audioCtx = null;
+let balls = [];
+let running = false;
+let winner = null;
+
+// ========== AUDIO ==========
+
+function initAudio() {
+    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+}
+
+// 벽에 닿을 때 (퐁 - 분열)
+function playSplitSound(colorIndex) {
+    if (!audioCtx) return;
+
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+
+    // 색상별 다른 피치
+    const baseFreq = [523, 659, 784, 880][colorIndex]; // C5, E5, G5, A5
+
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(baseFreq, audioCtx.currentTime);
+    osc.frequency.exponentialRampToValueAtTime(baseFreq * 1.5, audioCtx.currentTime + 0.1);
+
+    gain.gain.setValueAtTime(0.3, audioCtx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.2);
+
+    osc.connect(gain);
+    gain.connect(audioCtx.destination);
+    osc.start();
+    osc.stop(audioCtx.currentTime + 0.2);
+}
+
+// 깨질 때 (파삭)
+function playBreakSound() {
+    if (!audioCtx) return;
+
+    // 노이즈 버스트
+    const bufferSize = audioCtx.sampleRate * 0.15;
+    const buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
+    const data = buffer.getChannelData(0);
+
+    for (let i = 0; i < bufferSize; i++) {
+        const env = Math.exp(-i / (bufferSize * 0.2));
+        data[i] = (Math.random() * 2 - 1) * env;
+    }
+
+    const source = audioCtx.createBufferSource();
+    source.buffer = buffer;
+
+    const filter = audioCtx.createBiquadFilter();
+    filter.type = 'highpass';
+    filter.frequency.value = 2000;
+
+    const gain = audioCtx.createGain();
+    gain.gain.value = 0.25;
+
+    source.connect(filter);
+    filter.connect(gain);
+    gain.connect(audioCtx.destination);
+    source.start();
+}
+
+// 공끼리 부딪힐 때 (통)
+function playBounceSound() {
+    if (!audioCtx) return;
+
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+
+    osc.type = 'triangle';
+    osc.frequency.setValueAtTime(200, audioCtx.currentTime);
+    osc.frequency.exponentialRampToValueAtTime(100, audioCtx.currentTime + 0.08);
+
+    gain.gain.setValueAtTime(0.2, audioCtx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.1);
+
+    osc.connect(gain);
+    gain.connect(audioCtx.destination);
+    osc.start();
+    osc.stop(audioCtx.currentTime + 0.1);
+}
+
+// 승리 사운드
+function playWinSound() {
+    if (!audioCtx) return;
+
+    const notes = [523, 659, 784, 1047]; // C5, E5, G5, C6
+    notes.forEach((freq, i) => {
+        setTimeout(() => {
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+
+            osc.type = 'sine';
+            osc.frequency.value = freq;
+
+            gain.gain.setValueAtTime(0.3, audioCtx.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.3);
+
+            osc.connect(gain);
+            gain.connect(audioCtx.destination);
+            osc.start();
+            osc.stop(audioCtx.currentTime + 0.3);
+        }, i * 150);
+    });
+}
+
+// ========== BALL CLASS ==========
+
+class Ball {
+    constructor(x, y, vx, vy, colorIndex) {
+        this.x = x;
+        this.y = y;
+        this.vx = vx;
+        this.vy = vy;
+        this.colorIndex = colorIndex;
+        this.radius = BALL_RADIUS;
+        this.hits = 0;
+        this.dead = false;
+        this.justSplit = false; // 분열 직후 플래그
+        this.splitCooldown = 0;
+    }
+
+    update() {
+        this.x += this.vx;
+        this.y += this.vy;
+
+        if (this.splitCooldown > 0) this.splitCooldown--;
+
+        // 벽 충돌 체크
+        const dx = this.x - ARENA.x;
+        const dy = this.y - ARENA.y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+
+        if (dist + this.radius > ARENA.radius && this.splitCooldown === 0) {
+            // 벽에 닿음 - 반사 + 분열
+            const nx = dx / dist;
+            const ny = dy / dist;
+
+            // 위치 보정
+            this.x = ARENA.x + nx * (ARENA.radius - this.radius - 1);
+            this.y = ARENA.y + ny * (ARENA.radius - this.radius - 1);
+
+            // 반사
+            const dot = this.vx * nx + this.vy * ny;
+            this.vx -= 2 * dot * nx;
+            this.vy -= 2 * dot * ny;
+
+            // 속력 정규화
+            this.normalizeSpeed();
+
+            // 분열
+            this.justSplit = true;
+            this.splitCooldown = 30;
+            playSplitSound(this.colorIndex);
+        }
+    }
+
+    normalizeSpeed() {
+        const speed = Math.sqrt(this.vx * this.vx + this.vy * this.vy);
+        if (speed > 0) {
+            this.vx = (this.vx / speed) * BALL_SPEED;
+            this.vy = (this.vy / speed) * BALL_SPEED;
+        }
+    }
+
+    draw() {
+        ctx.fillStyle = COLORS[this.colorIndex];
+        ctx.beginPath();
+        ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+        ctx.fill();
+
+        // 히트 표시 (금 간 효과)
+        if (this.hits > 0) {
+            ctx.strokeStyle = 'rgba(0,0,0,0.5)';
+            ctx.lineWidth = 1;
+            for (let i = 0; i < this.hits; i++) {
+                const angle = (i / MAX_HITS) * Math.PI * 2 + Math.PI / 4;
+                ctx.beginPath();
+                ctx.moveTo(this.x, this.y);
+                ctx.lineTo(
+                    this.x + Math.cos(angle) * this.radius,
+                    this.y + Math.sin(angle) * this.radius
+                );
+                ctx.stroke();
+            }
+        }
+    }
+}
+
+// ========== GAME LOGIC ==========
+
+function createInitialBalls() {
+    balls = [];
+
+    for (let i = 0; i < 4; i++) {
+        const angle = (i / 4) * Math.PI * 2 + Math.PI / 4;
+        const dist = 50;
+        const x = ARENA.x + Math.cos(angle) * dist;
+        const y = ARENA.y + Math.sin(angle) * dist;
+
+        // 랜덤 방향
+        const vAngle = Math.random() * Math.PI * 2;
+        const vx = Math.cos(vAngle) * BALL_SPEED;
+        const vy = Math.sin(vAngle) * BALL_SPEED;
+
+        balls.push(new Ball(x, y, vx, vy, i));
+    }
+}
+
+function countBalls() {
+    const counts = [0, 0, 0, 0];
+    balls.forEach(b => {
+        if (!b.dead) counts[b.colorIndex]++;
+    });
+    return counts;
+}
+
+function updateScoreboard() {
+    const counts = countBalls();
+    for (let i = 0; i < 4; i++) {
+        document.getElementById('score' + i).textContent = counts[i];
+    }
+}
+
+function checkWinner() {
+    const counts = countBalls();
+    for (let i = 0; i < 4; i++) {
+        if (counts[i] >= WIN_COUNT) {
+            return i;
+        }
+    }
+    return null;
+}
+
+function handleCollisions() {
+    // 공끼리 충돌
+    for (let i = 0; i < balls.length; i++) {
+        for (let j = i + 1; j < balls.length; j++) {
+            const a = balls[i];
+            const b = balls[j];
+
+            if (a.dead || b.dead) continue;
+
+            const dx = b.x - a.x;
+            const dy = b.y - a.y;
+            const dist = Math.sqrt(dx * dx + dy * dy);
+            const minDist = a.radius + b.radius;
+
+            if (dist < minDist && dist > 0) {
+                // 충돌!
+                const nx = dx / dist;
+                const ny = dy / dist;
+
+                // 위치 분리
+                const overlap = minDist - dist;
+                a.x -= nx * overlap / 2;
+                a.y -= ny * overlap / 2;
+                b.x += nx * overlap / 2;
+                b.y += ny * overlap / 2;
+
+                // 속도 교환 (탄성 충돌)
+                const dvx = a.vx - b.vx;
+                const dvy = a.vy - b.vy;
+                const dot = dvx * nx + dvy * ny;
+
+                a.vx -= dot * nx;
+                a.vy -= dot * ny;
+                b.vx += dot * nx;
+                b.vy += dot * ny;
+
+                // 속력 정규화
+                a.normalizeSpeed();
+                b.normalizeSpeed();
+
+                // 히트 카운트 증가
+                a.hits++;
+                b.hits++;
+
+                playBounceSound();
+
+                // 3번 맞으면 죽음
+                if (a.hits >= MAX_HITS) {
+                    a.dead = true;
+                    playBreakSound();
+                    spawnParticles(a.x, a.y, a.colorIndex);
+                }
+                if (b.hits >= MAX_HITS) {
+                    b.dead = true;
+                    playBreakSound();
+                    spawnParticles(b.x, b.y, b.colorIndex);
+                }
+            }
+        }
+    }
+}
+
+function handleSplits() {
+    const newBalls = [];
+
+    balls.forEach(ball => {
+        if (ball.justSplit && !ball.dead) {
+            ball.justSplit = false;
+
+            // 새 공 생성 (살짝 다른 방향)
+            const angle = Math.atan2(ball.vy, ball.vx);
+            const newAngle = angle + (Math.random() - 0.5) * Math.PI / 2;
+
+            const newBall = new Ball(
+                ball.x,
+                ball.y,
+                Math.cos(newAngle) * BALL_SPEED,
+                Math.sin(newAngle) * BALL_SPEED,
+                ball.colorIndex
+            );
+            newBall.splitCooldown = 30;
+            newBalls.push(newBall);
+        }
+    });
+
+    balls = balls.concat(newBalls);
+}
+
+// 파티클 효과
+let particles = [];
+
+function spawnParticles(x, y, colorIndex) {
+    for (let i = 0; i < 8; i++) {
+        const angle = (i / 8) * Math.PI * 2;
+        particles.push({
+            x, y,
+            vx: Math.cos(angle) * 3,
+            vy: Math.sin(angle) * 3,
+            life: 30,
+            color: COLORS[colorIndex]
+        });
+    }
+}
+
+function updateParticles() {
+    particles.forEach(p => {
+        p.x += p.vx;
+        p.y += p.vy;
+        p.vx *= 0.95;
+        p.vy *= 0.95;
+        p.life--;
+    });
+    particles = particles.filter(p => p.life > 0);
+}
+
+function drawParticles() {
+    particles.forEach(p => {
+        ctx.fillStyle = p.color;
+        ctx.globalAlpha = p.life / 30;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 3, 0, Math.PI * 2);
+        ctx.fill();
+    });
+    ctx.globalAlpha = 1;
+}
+
+// ========== RENDERING ==========
+
+function draw() {
+    // 배경
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, W, H);
+
+    // 경기장 (흰색 원)
+    ctx.strokeStyle = '#fff';
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.arc(ARENA.x, ARENA.y, ARENA.radius, 0, Math.PI * 2);
+    ctx.stroke();
+
+    // 경기장 내부 약간 밝게
+    ctx.fillStyle = 'rgba(255,255,255,0.05)';
+    ctx.fill();
+
+    // 공들
+    balls.forEach(b => {
+        if (!b.dead) b.draw();
+    });
+
+    // 파티클
+    drawParticles();
+}
+
+function gameLoop() {
+    if (!running) return;
+
+    // 업데이트
+    balls.forEach(b => {
+        if (!b.dead) b.update();
+    });
+
+    handleCollisions();
+    handleSplits();
+    updateParticles();
+
+    // 죽은 공 제거
+    balls = balls.filter(b => !b.dead);
+
+    // 스코어보드 업데이트
+    updateScoreboard();
+
+    // 승자 체크
+    const w = checkWinner();
+    if (w !== null) {
+        winner = w;
+        running = false;
+        showWinner(w);
+        return;
+    }
+
+    draw();
+    requestAnimationFrame(gameLoop);
+}
+
+function showWinner(colorIndex) {
+    draw(); // 마지막 프레임
+
+    playWinSound();
+
+    document.getElementById('winner-color').style.background = COLORS[colorIndex];
+    document.getElementById('winner-screen').style.display = 'flex';
+}
+
+function start() {
+    document.getElementById('start-screen').style.display = 'none';
+    initAudio();
+    createInitialBalls();
+    running = true;
+    gameLoop();
+}
+
+function init() {
+    draw();
+
+    const ss = document.getElementById('start-screen');
+    ss.addEventListener('click', () => { if (!running && winner === null) start(); });
+    ss.addEventListener('touchstart', (e) => {
+        e.preventDefault();
+        if (!running && winner === null) start();
+    });
+}
+
+window.onload = init;
+</script>
+</body>
+</html>
