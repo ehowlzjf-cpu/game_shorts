@@ -251,6 +251,7 @@ class Ball {
         this.dead = false;
         this.justSplit = false;
         this.wallCooldown = 0; // 벽 충돌 쿨다운
+        this.invincible = 0; // 무적 시간 (새로 생긴 공)
     }
 
     update() {
@@ -258,6 +259,7 @@ class Ball {
         this.y += this.vy;
 
         if (this.wallCooldown > 0) this.wallCooldown--;
+        if (this.invincible > 0) this.invincible--;
 
         // 벽 충돌 체크
         const dx = this.x - ARENA.x;
@@ -408,7 +410,12 @@ function handleCollisions() {
                 a.normalizeSpeed();
                 b.normalizeSpeed();
 
-                // 히트 카운트 증가
+                // 같은 색이면 히트 카운트 안 침!
+                if (a.colorIndex === b.colorIndex) {
+                    continue;
+                }
+
+                // 다른 색끼리만 히트 카운트 증가
                 a.hits++;
                 b.hits++;
 
