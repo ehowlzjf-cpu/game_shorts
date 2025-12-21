@@ -1,0 +1,476 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Steel Ball Physics</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            overflow: hidden;
+            font-family: 'Arial', sans-serif;
+        }
+        #game-container {
+            position: relative;
+            width: 360px;
+            height: 640px;
+            overflow: hidden;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.4);
+        }
+        canvas {
+            display: block;
+            border-radius: 20px;
+        }
+        #start-screen {
+            position: absolute;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+            background: rgba(0,0,0,0.85);
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            z-index: 10;
+            border-radius: 20px;
+        }
+        #title {
+            font-size: 28px;
+            font-weight: bold;
+            color: #fff;
+            margin-bottom: 20px;
+            letter-spacing: 2px;
+            text-align: center;
+        }
+        #start-text {
+            font-size: 18px;
+            color: #fff;
+            letter-spacing: 3px;
+            animation: pulse 1.5s ease-in-out infinite;
+        }
+        @keyframes pulse {
+            0%, 100% { opacity: 0.5; }
+            50% { opacity: 1; }
+        }
+        #info {
+            position: absolute;
+            top: 15px;
+            left: 15px;
+            color: #fff;
+            font-size: 12px;
+            z-index: 5;
+            background: rgba(0,0,0,0.5);
+            padding: 8px 12px;
+            border-radius: 8px;
+        }
+        #reset-btn {
+            position: absolute;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            padding: 12px 24px;
+            background: rgba(255,255,255,0.2);
+            color: #fff;
+            border: 2px solid #fff;
+            border-radius: 25px;
+            font-size: 14px;
+            font-weight: bold;
+            cursor: pointer;
+            z-index: 5;
+            backdrop-filter: blur(10px);
+            display: none;
+        }
+        #reset-btn:hover {
+            background: rgba(255,255,255,0.3);
+        }
+    </style>
+</head>
+<body>
+    <div id="game-container">
+        <canvas id="canvas"></canvas>
+        <div id="info">
+            <div>쇠공 질량: 1kg</div>
+            <div id="status">준비중...</div>
+        </div>
+        <button id="reset-btn">재시작</button>
+        <div id="start-screen">
+            <div id="title">STEEL BALL<br/>DESTROYER</div>
+            <div id="start-text">TAP TO DROP</div>
+        </div>
+    </div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/cannon@0.6.2/build/cannon.min.js"></script>
+
+<script>
+const canvas = document.getElementById('canvas');
+const W = 360, H = 640;
+canvas.width = W;
+canvas.height = H;
+
+// ========== THREE.JS SETUP ==========
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x87ceeb);
+scene.fog = new THREE.Fog(0x87ceeb, 20, 100);
+
+const camera = new THREE.PerspectiveCamera(50, W / H, 0.1, 1000);
+camera.position.set(0, 15, 30);
+camera.lookAt(0, 5, 0);
+
+const renderer = new THREE.WebGLRenderer({ canvas: canvas, antialias: true });
+renderer.setSize(W, H);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+
+// 조명
+const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+scene.add(ambientLight);
+
+const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+directionalLight.position.set(10, 20, 10);
+directionalLight.castShadow = true;
+directionalLight.shadow.mapSize.width = 2048;
+directionalLight.shadow.mapSize.height = 2048;
+directionalLight.shadow.camera.left = -20;
+directionalLight.shadow.camera.right = 20;
+directionalLight.shadow.camera.top = 20;
+directionalLight.shadow.camera.bottom = -20;
+scene.add(directionalLight);
+
+// ========== CANNON.JS PHYSICS ==========
+
+const world = new CANNON.World();
+world.gravity.set(0, -9.82, 0); // 실제 중력
+world.broadphase = new CANNON.NaiveBroadphase();
+world.solver.iterations = 10;
+world.defaultContactMaterial.friction = 0.3;
+world.defaultContactMaterial.restitution = 0.5;
+
+let audioCtx = null;
+let running = false;
+let ballBody = null;
+let ballMesh = null;
+let cubes = [];
+let dropped = false;
+
+// ========== AUDIO ==========
+
+function initAudio() {
+    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+}
+
+function playImpactSound(intensity) {
+    if (!audioCtx) return;
+
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+
+    const freq = 100 + Math.random() * 100;
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
+    osc.frequency.exponentialRampToValueAtTime(50, audioCtx.currentTime + 0.1);
+
+    const volume = Math.min(intensity * 0.3, 0.5);
+    gain.gain.setValueAtTime(volume, audioCtx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.2);
+
+    osc.connect(gain);
+    gain.connect(audioCtx.destination);
+    osc.start();
+    osc.stop(audioCtx.currentTime + 0.2);
+}
+
+function playRollSound() {
+    if (!audioCtx || Math.random() > 0.1) return;
+
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+
+    osc.type = 'sine';
+    osc.frequency.value = 80 + Math.random() * 40;
+
+    gain.gain.value = 0.05;
+
+    osc.connect(gain);
+    gain.connect(audioCtx.destination);
+    osc.start();
+    osc.stop(audioCtx.currentTime + 0.05);
+}
+
+// ========== CURVED RAMP ==========
+
+function createCurvedRamp() {
+    // 곡면 램프 생성 (반원 형태)
+    const rampGeometry = new THREE.CylinderGeometry(8, 8, 15, 32, 1, true, 0, Math.PI);
+    const rampMaterial = new THREE.MeshPhongMaterial({
+        color: 0x8b4513,
+        side: THREE.DoubleSide,
+        shininess: 30
+    });
+    const ramp = new THREE.Mesh(rampGeometry, rampMaterial);
+    ramp.rotation.z = Math.PI / 2;
+    ramp.position.set(0, 8, 0);
+    ramp.castShadow = true;
+    ramp.receiveShadow = true;
+    scene.add(ramp);
+
+    // 물리 바디 - 반원 램프를 여러 박스로 근사
+    const segments = 16;
+    for (let i = 0; i < segments; i++) {
+        const angle = (i / segments) * Math.PI;
+        const x = Math.cos(angle) * 8;
+        const y = 8 + Math.sin(angle) * 8;
+        const z = (i - segments / 2) * (15 / segments);
+
+        const shape = new CANNON.Box(new CANNON.Vec3(0.5, 0.2, 15 / segments / 2));
+        const body = new CANNON.Body({ mass: 0 });
+        body.addShape(shape);
+        body.position.set(x, y, z);
+        body.quaternion.setFromAxisAngle(new CANNON.Vec3(0, 0, 1), -angle);
+        world.addBody(body);
+    }
+}
+
+// ========== INVERTED PYRAMID ==========
+
+function createInvertedPyramid() {
+    const cubeSize = 0.8;
+    const spacing = 0.05;
+    const layers = 20;
+
+    // 역피라미드: 1층(바닥)=1개, 2층=4개, 3층=9개 ... 20층=400개
+    for (let layer = 0; layer < layers; layer++) {
+        const cubesPerSide = layer + 1; // 1, 2, 3, ..., 20
+        const totalCubes = cubesPerSide * cubesPerSide;
+        const layerY = layer * (cubeSize + spacing);
+
+        for (let i = 0; i < cubesPerSide; i++) {
+            for (let j = 0; j < cubesPerSide; j++) {
+                const x = (i - cubesPerSide / 2 + 0.5) * (cubeSize + spacing);
+                const z = (j - cubesPerSide / 2 + 0.5) * (cubeSize + spacing);
+
+                // 큐브 메쉬
+                const geometry = new THREE.BoxGeometry(cubeSize, cubeSize, cubeSize);
+                const hue = (layer / layers) * 0.8;
+                const color = new THREE.Color().setHSL(hue, 0.7, 0.6);
+                const material = new THREE.MeshPhongMaterial({ color: color });
+                const cube = new THREE.Mesh(geometry, material);
+                cube.position.set(x, layerY, z);
+                cube.castShadow = true;
+                cube.receiveShadow = true;
+                scene.add(cube);
+
+                // 물리 바디
+                const shape = new CANNON.Box(new CANNON.Vec3(cubeSize/2, cubeSize/2, cubeSize/2));
+                const body = new CANNON.Body({
+                    mass: 0.1,
+                    shape: shape,
+                    material: new CANNON.Material({ friction: 0.3, restitution: 0.3 })
+                });
+                body.position.set(x, layerY, z);
+                world.addBody(body);
+
+                cubes.push({ mesh: cube, body: body });
+            }
+        }
+    }
+}
+
+// ========== STEEL BALL ==========
+
+function createSteelBall() {
+    // 1kg 쇠공
+    const radius = 0.5;
+
+    // 메쉬
+    const geometry = new THREE.SphereGeometry(radius, 32, 32);
+    const material = new THREE.MeshPhongMaterial({
+        color: 0x808080,
+        shininess: 100,
+        metalness: 0.8
+    });
+    ballMesh = new THREE.Mesh(geometry, material);
+    ballMesh.position.set(-10, 15, 0); // 램프 위 시작 위치
+    ballMesh.castShadow = true;
+    scene.add(ballMesh);
+
+    // 물리 바디 (1kg = mass: 1)
+    const shape = new CANNON.Sphere(radius);
+    ballBody = new CANNON.Body({
+        mass: 1.0, // 1kg
+        shape: shape,
+        linearDamping: 0.01,
+        angularDamping: 0.01,
+        material: new CANNON.Material({ friction: 0.2, restitution: 0.7 })
+    });
+    ballBody.position.set(-10, 15, 0);
+    world.addBody(ballBody);
+
+    // 충돌 이벤트
+    ballBody.addEventListener('collide', (e) => {
+        const impactVelocity = e.contact.getImpactVelocityAlongNormal();
+        if (Math.abs(impactVelocity) > 0.5) {
+            playImpactSound(Math.abs(impactVelocity));
+        }
+    });
+}
+
+// ========== GROUND ==========
+
+function createGround() {
+    // 바닥 메쉬
+    const geometry = new THREE.PlaneGeometry(50, 50);
+    const material = new THREE.MeshPhongMaterial({
+        color: 0x3a5f3a,
+        side: THREE.DoubleSide
+    });
+    const ground = new THREE.Mesh(geometry, material);
+    ground.rotation.x = -Math.PI / 2;
+    ground.position.y = -1;
+    ground.receiveShadow = true;
+    scene.add(ground);
+
+    // 물리 바디
+    const shape = new CANNON.Plane();
+    const body = new CANNON.Body({ mass: 0 });
+    body.addShape(shape);
+    body.quaternion.setFromAxisAngle(new CANNON.Vec3(1, 0, 0), -Math.PI / 2);
+    body.position.set(0, -1, 0);
+    world.addBody(body);
+}
+
+// ========== GAME LOGIC ==========
+
+function dropBall() {
+    if (dropped) return;
+    dropped = true;
+
+    // 공을 놓음 (중력에 의해 떨어짐)
+    document.getElementById('status').textContent = '낙하 중...';
+
+    setTimeout(() => {
+        document.getElementById('status').textContent = '구조물 파괴 중!';
+    }, 2000);
+}
+
+function resetGame() {
+    // 모든 큐브 제거
+    cubes.forEach(cube => {
+        scene.remove(cube.mesh);
+        world.removeBody(cube.body);
+        cube.mesh.geometry.dispose();
+        cube.mesh.material.dispose();
+    });
+    cubes = [];
+
+    // 공 제거
+    if (ballMesh) {
+        scene.remove(ballMesh);
+        ballMesh.geometry.dispose();
+        ballMesh.material.dispose();
+    }
+    if (ballBody) {
+        world.removeBody(ballBody);
+    }
+
+    // 재생성
+    createInvertedPyramid();
+    createSteelBall();
+
+    dropped = false;
+    document.getElementById('status').textContent = '준비 완료!';
+    document.getElementById('reset-btn').style.display = 'none';
+
+    // 3초 후 자동 낙하
+    setTimeout(() => {
+        if (!dropped) dropBall();
+    }, 1000);
+}
+
+function animate() {
+    requestAnimationFrame(animate);
+
+    if (running) {
+        // 물리 시뮬레이션 업데이트
+        world.step(1/60);
+
+        // 공 위치 동기화
+        if (ballMesh && ballBody) {
+            ballMesh.position.copy(ballBody.position);
+            ballMesh.quaternion.copy(ballBody.quaternion);
+
+            // 롤링 사운드
+            if (ballBody.velocity.length() > 0.5) {
+                playRollSound();
+            }
+        }
+
+        // 큐브 위치 동기화
+        cubes.forEach(cube => {
+            cube.mesh.position.copy(cube.body.position);
+            cube.mesh.quaternion.copy(cube.body.quaternion);
+
+            // 떨어진 큐브 제거 (화면 밖)
+            if (cube.body.position.y < -10) {
+                cube.mesh.visible = false;
+            }
+        });
+
+        // 리셋 버튼 표시 (5초 후)
+        if (dropped && ballBody && ballBody.velocity.length() < 0.1) {
+            setTimeout(() => {
+                document.getElementById('reset-btn').style.display = 'block';
+            }, 2000);
+        }
+    }
+
+    renderer.render(scene, camera);
+}
+
+function start() {
+    document.getElementById('start-screen').style.display = 'none';
+    initAudio();
+
+    createGround();
+    createCurvedRamp();
+    createInvertedPyramid();
+    createSteelBall();
+
+    running = true;
+    document.getElementById('status').textContent = '준비 완료!';
+
+    // 3초 후 자동 낙하
+    setTimeout(() => {
+        dropBall();
+    }, 1000);
+}
+
+function init() {
+    animate();
+
+    const ss = document.getElementById('start-screen');
+    ss.addEventListener('click', () => { if (!running) start(); });
+    ss.addEventListener('touchstart', (e) => {
+        e.preventDefault();
+        if (!running) start();
+    });
+
+    const resetBtn = document.getElementById('reset-btn');
+    resetBtn.addEventListener('click', resetGame);
+    resetBtn.addEventListener('touchstart', (e) => {
+        e.preventDefault();
+        resetGame();
+    });
+}
+
+window.onload = init;
+</script>
+</body>
+</html>
