@@ -215,17 +215,18 @@ function createCurvedRamp() {
     const groundY = -1;
 
     for (let i = 0; i < segments; i++) {
-        // 90도 호 (바닥에서 시작해서 옆으로)
+        // 90도 호 (바닥에서 시작해서 옆으로) - 시계방향 90도 회전
         const angle = (i / segments) * (Math.PI / 2);
-        const nextAngle = ((i + 1) / segments) * (Math.PI / 2);
 
-        // 램프 중심 위치 (공이 떨어지는 곳 근처)
-        const centerX = -6;
+        // 램프 중심 위치 (왼쪽)
+        const centerX = -8;
+        const centerZ = 0;
         const centerY = groundY + radius;
 
-        // 현재 세그먼트 위치 (원의 내면)
-        const x = centerX + Math.sin(angle) * radius;
-        const y = centerY - Math.cos(angle) * radius;
+        // 현재 세그먼트 위치 (원의 내면) - x-y 평면에서 x-z 평면으로 회전
+        const x = centerX + Math.cos(angle) * radius;
+        const y = centerY - Math.sin(angle) * radius;
+        const z = centerZ;
 
         // 비주얼
         const segmentHeight = 0.3;
@@ -236,8 +237,9 @@ function createCurvedRamp() {
             shininess: 30
         });
         const segment = new THREE.Mesh(geometry, material);
-        segment.position.set(x, y, 0);
-        segment.rotation.z = angle; // 내면이 위를 향하도록
+        segment.position.set(x, y, z);
+        segment.rotation.y = Math.PI / 2; // Y축 90도 회전
+        segment.rotation.z = angle; // 곡면 각도
         segment.castShadow = true;
         segment.receiveShadow = true;
         scene.add(segment);
@@ -246,23 +248,30 @@ function createCurvedRamp() {
         const shape = new CANNON.Box(new CANNON.Vec3(segmentWidth/2, segmentHeight/2, width/2));
         const body = new CANNON.Body({ mass: 0 });
         body.addShape(shape);
-        body.position.set(x, y, 0);
-        body.quaternion.setFromAxisAngle(new CANNON.Vec3(0, 0, 1), angle);
+        body.position.set(x, y, z);
+
+        // Y축 + Z축 회전 조합
+        const quat1 = new CANNON.Quaternion();
+        quat1.setFromAxisAngle(new CANNON.Vec3(0, 1, 0), Math.PI / 2);
+        const quat2 = new CANNON.Quaternion();
+        quat2.setFromAxisAngle(new CANNON.Vec3(0, 0, 1), angle);
+        body.quaternion = quat1.mult(quat2);
+
         world.addBody(body);
     }
 
-    // 슬로프 끝에서 구조물까지 평평한 경로
-    const pathGeometry = new THREE.BoxGeometry(6, 0.3, width);
+    // 슬로프 끝에서 구조물까지 평평한 경로 (더 길게)
+    const pathGeometry = new THREE.BoxGeometry(10, 0.3, width);
     const pathMaterial = new THREE.MeshPhongMaterial({ color: 0x8b4513 });
     const path = new THREE.Mesh(pathGeometry, pathMaterial);
-    path.position.set(-1, groundY + 0.15, 0);
+    path.position.set(-2, groundY + 0.15, 0);
     path.receiveShadow = true;
     scene.add(path);
 
-    const pathShape = new CANNON.Box(new CANNON.Vec3(3, 0.15, width/2));
+    const pathShape = new CANNON.Box(new CANNON.Vec3(5, 0.15, width/2));
     const pathBody = new CANNON.Body({ mass: 0 });
     pathBody.addShape(pathShape);
-    pathBody.position.set(-1, groundY + 0.15, 0);
+    pathBody.position.set(-2, groundY + 0.15, 0);
     world.addBody(pathBody);
 }
 
@@ -283,7 +292,8 @@ function createInvertedPyramid() {
     for (let y = 0; y < height; y++) {
         for (let x = 0; x < width; x++) {
             for (let z = 0; z < depth; z++) {
-                const posX = (x - width/2 + 0.5) * (cubeSize + spacing) + 3;
+                // 슬로프와 더 멀리 떨어뜨림 (x 위치를 +6으로 이동)
+                const posX = (x - width/2 + 0.5) * (cubeSize + spacing) + 6;
                 const posY = groundY + cubeSize/2 + y * (cubeSize + spacing);
                 const posZ = (z - depth/2 + 0.5) * (cubeSize + spacing);
 
@@ -328,7 +338,7 @@ function createSteelBall() {
         metalness: 0.8
     });
     ballMesh = new THREE.Mesh(geometry, material);
-    ballMesh.position.set(-6, 10, 0); // 슬로프 위에서 시작
+    ballMesh.position.set(-8, 10, 0); // 슬로프 위에서 시작
     ballMesh.castShadow = true;
     scene.add(ballMesh);
 
@@ -341,7 +351,7 @@ function createSteelBall() {
         angularDamping: 0.01,
         material: new CANNON.Material({ friction: 0.2, restitution: 0.7 })
     });
-    ballBody.position.set(-6, 10, 0);
+    ballBody.position.set(-8, 10, 0);
     world.addBody(ballBody);
 
     // 충돌 이벤트
