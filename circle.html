@@ -58,22 +58,10 @@
             50% { opacity: 1; }
         }
         #score {
-            position: absolute;
-            top: 20px;
-            right: 20px;
-            font-family: 'Arial', sans-serif;
-            font-size: 24px;
-            color: #fff;
-            z-index: 5;
+            display: none;
         }
         #timer {
-            position: absolute;
-            top: 20px;
-            left: 20px;
-            font-family: 'Arial', sans-serif;
-            font-size: 20px;
-            color: #fff;
-            z-index: 5;
+            display: none;
         }
         #game-over {
             position: absolute;
@@ -131,20 +119,19 @@ canvas.width = W;
 canvas.height = H;
 
 const CENTER = { x: W / 2, y: H / 2 };
-const CIRCLE_RADIUS = 120;
-const BALL_RADIUS = 8;
+const CIRCLE_RADIUS = 140;
+const BALL_RADIUS = 12;
 const GAP_SIZE = 0.6; // 라디안 (더 큰 출구)
 const TIME_LIMIT = 4;
 
-// 멜로디: 라미라미 시미시미 도미도미 레미레미
+// 멜로디: 라 미 라 미 시 미 시 미 도 미 도 미 레 미 레 미 (한 음씩)
 const MELODY = [
-    [440, 659.25], [440, 659.25], // 라미 라미
-    [493.88, 659.25], [493.88, 659.25], // 시미 시미
-    [523.25, 659.25], [523.25, 659.25], // 도미 도미
-    [587.33, 659.25], [587.33, 659.25]  // 레미 레미
+    220, 329.63, 220, 329.63,       // 라 미 라 미 (A3, E4)
+    246.94, 329.63, 246.94, 329.63, // 시 미 시 미 (B3, E4)
+    261.63, 329.63, 261.63, 329.63, // 도 미 도 미 (C4, E4)
+    293.66, 329.63, 293.66, 329.63  // 레 미 레 미 (D4, E4)
 ];
 let melodyIndex = 0;
-let noteInPair = 0;
 
 let audioCtx = null;
 let running = false;
@@ -155,7 +142,8 @@ let lastTime = 0;
 
 let ball = null;
 let circleAngle = 0;
-let circleSpeed = 0.02;
+let circleSpeed = 0;
+let circleStarted = false;
 let obstacles = [];
 
 // 별들
@@ -175,73 +163,45 @@ function initAudio() {
     if (audioCtx.state === 'suspended') audioCtx.resume();
 }
 
-function playNote(freq1, freq2) {
+function playNote(freq) {
     if (!audioCtx) return;
 
-    // 청아한 벨 소리를 위한 설정
     const now = audioCtx.currentTime;
 
-    // 메인 음 (한 옥타브 높게)
+    // 칼림바: 맑고 금속적인 소리
     const osc1 = audioCtx.createOscillator();
     const gain1 = audioCtx.createGain();
     osc1.type = 'sine';
-    osc1.frequency.value = freq1 * 2;
-    gain1.gain.setValueAtTime(0.15, now);
-    gain1.gain.exponentialRampToValueAtTime(0.001, now + 0.8);
+    osc1.frequency.value = freq;
+    gain1.gain.setValueAtTime(0.35, now);
+    gain1.gain.exponentialRampToValueAtTime(0.001, now + 1.5);
     osc1.connect(gain1);
     gain1.connect(audioCtx.destination);
     osc1.start(now);
-    osc1.stop(now + 0.8);
+    osc1.stop(now + 1.5);
 
-    // 화음 (한 옥타브 높게)
+    // 고음 하모닉 (칼림바 특유의 맑은 소리)
     const osc2 = audioCtx.createOscillator();
     const gain2 = audioCtx.createGain();
     osc2.type = 'sine';
-    osc2.frequency.value = freq2 * 2;
-    gain2.gain.setValueAtTime(0.12, now);
+    osc2.frequency.value = freq * 2;
+    gain2.gain.setValueAtTime(0.1, now);
     gain2.gain.exponentialRampToValueAtTime(0.001, now + 0.8);
     osc2.connect(gain2);
     gain2.connect(audioCtx.destination);
     osc2.start(now);
     osc2.stop(now + 0.8);
-
-    // 하모닉 (벨 느낌)
-    const osc3 = audioCtx.createOscillator();
-    const gain3 = audioCtx.createGain();
-    osc3.type = 'sine';
-    osc3.frequency.value = freq1 * 4;
-    gain3.gain.setValueAtTime(0.05, now);
-    gain3.gain.exponentialRampToValueAtTime(0.001, now + 0.4);
-    osc3.connect(gain3);
-    gain3.connect(audioCtx.destination);
-    osc3.start(now);
-    osc3.stop(now + 0.4);
 }
 
 function playBounceSound() {
-    const [freq1, freq2] = MELODY[melodyIndex];
-    playNote(freq1, freq2);
-
-    noteInPair++;
-    if (noteInPair >= 2) {
-        noteInPair = 0;
-        melodyIndex = (melodyIndex + 1) % MELODY.length;
-    }
+    const freq = MELODY[melodyIndex];
+    playNote(freq);
+    melodyIndex = (melodyIndex + 1) % MELODY.length;
 }
 
 function playFreezeSound() {
-    if (!audioCtx) return;
-    const osc = audioCtx.createOscillator();
-    const gain = audioCtx.createGain();
-    osc.type = 'sawtooth';
-    osc.frequency.setValueAtTime(200, audioCtx.currentTime);
-    osc.frequency.exponentialRampToValueAtTime(50, audioCtx.currentTime + 0.3);
-    gain.gain.setValueAtTime(0.3, audioCtx.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.3);
-    osc.connect(gain);
-    gain.connect(audioCtx.destination);
-    osc.start();
-    osc.stop(audioCtx.currentTime + 0.3);
+    // 멜로디 이어서 재생
+    playBounceSound();
 }
 
 function playEscapeSound() {
@@ -263,18 +223,28 @@ function playEscapeSound() {
     });
 }
 
+const BALL_COLORS = ['#8a2be2', '#4ecdc4', '#9b59b6', '#00cec9', '#a29bfe', '#1abc9c'];
+let particles = [];
+
+const GRAVITY = 0.1;
+
 class Ball {
     constructor() {
-        this.x = CENTER.x;
-        this.y = CENTER.y;
-        this.vx = (Math.random() - 0.5) * 5;
-        this.vy = (Math.random() - 0.5) * 5;
+        this.x = CENTER.x + (Math.random() - 0.5) * 40;
+        this.y = CENTER.y - 80;
+        this.vx = 0;
+        this.vy = 0;
         this.radius = BALL_RADIUS;
         this.frozen = false;
+        this.colorIndex = 0;
+        this.color = BALL_COLORS[0];
     }
 
     update() {
         if (this.frozen) return;
+
+        // 중력
+        this.vy += GRAVITY;
 
         this.x += this.vx;
         this.y += this.vy;
@@ -287,30 +257,28 @@ class Ball {
         if (dist + this.radius > CIRCLE_RADIUS) {
             const angle = Math.atan2(dy, dx);
 
-            // 갭 체크
-            let gapStart = circleAngle;
-            let gapEnd = circleAngle + GAP_SIZE;
+            // 갭 체크 (각도 정규화)
+            let angleNorm = angle < 0 ? angle + Math.PI * 2 : angle;
+            let gapStart = circleAngle % (Math.PI * 2);
+            let gapEnd = gapStart + GAP_SIZE;
 
             let inGap = false;
             if (gapEnd > Math.PI * 2) {
-                inGap = angle >= gapStart || angle <= gapEnd - Math.PI * 2;
-            } else {
-                inGap = angle >= gapStart && angle <= gapEnd;
-            }
-            // 음수 각도 처리
-            let angleNorm = angle < 0 ? angle + Math.PI * 2 : angle;
-            if (gapEnd > Math.PI * 2) {
-                inGap = angleNorm >= gapStart || angleNorm <= gapEnd - Math.PI * 2;
+                inGap = angleNorm >= gapStart || angleNorm <= (gapEnd - Math.PI * 2);
             } else {
                 inGap = angleNorm >= gapStart && angleNorm <= gapEnd;
             }
 
-            if (inGap && dist > CIRCLE_RADIUS) {
-                // 탈출 성공!
-                return 'escaped';
+            // 갭에 있으면 탈출!
+            if (inGap) {
+                if (dist > CIRCLE_RADIUS + this.radius) {
+                    return 'escaped';
+                }
+                // 갭 안에서는 충돌 안함 - 그냥 통과
+                return 'playing';
             }
 
-            // 벽에 튕김
+            // 벽에 튕김 (갭이 아닌 경우만)
             const nx = dx / dist;
             const ny = dy / dist;
             this.x = CENTER.x + nx * (CIRCLE_RADIUS - this.radius - 1);
@@ -325,6 +293,16 @@ class Ball {
             if (speed < 2) {
                 this.vx *= 1.5;
                 this.vy *= 1.5;
+            }
+
+            // 색깔 변경
+            this.colorIndex = (this.colorIndex + 1) % BALL_COLORS.length;
+            this.color = BALL_COLORS[this.colorIndex];
+
+            // 첫 충돌시 원 회전 시작
+            if (!circleStarted) {
+                circleStarted = true;
+                circleSpeed = 0.01;
             }
 
             playBounceSound();
@@ -355,24 +333,17 @@ class Ball {
     draw() {
         ctx.save();
 
-        // 그림자
-        ctx.fillStyle = 'rgba(0,0,0,0.3)';
-        ctx.beginPath();
-        ctx.arc(this.x + 2, this.y + 2, this.radius, 0, Math.PI * 2);
-        ctx.fill();
-
-        // 공
+        // 공 본체
         const gradient = ctx.createRadialGradient(
-            this.x - 3, this.y - 3, 0,
+            this.x, this.y, 0,
             this.x, this.y, this.radius
         );
         if (this.frozen) {
-            gradient.addColorStop(0, '#888');
-            gradient.addColorStop(1, '#444');
+            gradient.addColorStop(0, '#555');
+            gradient.addColorStop(1, '#222');
         } else {
-            gradient.addColorStop(0, '#fff');
-            gradient.addColorStop(0.5, '#4ecdc4');
-            gradient.addColorStop(1, '#2a9d8f');
+            gradient.addColorStop(0, this.color);
+            gradient.addColorStop(1, this.color);
         }
         ctx.fillStyle = gradient;
         ctx.beginPath();
@@ -399,12 +370,6 @@ function freezeBall() {
     });
     playFreezeSound();
 
-    // 장애물이 너무 많으면 게임오버
-    if (obstacles.length >= 10) {
-        endGame();
-        return;
-    }
-
     // 새 공 생성
     setTimeout(() => {
         if (running && !gameOver) {
@@ -413,20 +378,49 @@ function freezeBall() {
     }, 500);
 }
 
+function createExplosion() {
+    // 원 폭발 파티클
+    for (let i = 0; i < 50; i++) {
+        const angle = (i / 50) * Math.PI * 2;
+        const speed = 3 + Math.random() * 5;
+        particles.push({
+            x: CENTER.x + Math.cos(angle) * CIRCLE_RADIUS,
+            y: CENTER.y + Math.sin(angle) * CIRCLE_RADIUS,
+            vx: Math.cos(angle) * speed,
+            vy: Math.sin(angle) * speed,
+            life: 1,
+            color: `hsl(${(i / 50) * 360}, 80%, 60%)`,
+            size: 3 + Math.random() * 4
+        });
+    }
+    // 중심 폭발
+    for (let i = 0; i < 30; i++) {
+        const angle = Math.random() * Math.PI * 2;
+        const speed = 2 + Math.random() * 6;
+        particles.push({
+            x: CENTER.x,
+            y: CENTER.y,
+            vx: Math.cos(angle) * speed,
+            vy: Math.sin(angle) * speed,
+            life: 1,
+            color: ball ? ball.color : '#fff',
+            size: 2 + Math.random() * 3
+        });
+    }
+}
+
 function escaped() {
-    score++;
-    document.getElementById('score').textContent = score;
+    createExplosion();
     playEscapeSound();
 
-    // 난이도 증가
-    circleSpeed += 0.003;
-
-    // 새 공 생성
+    // 탈출 성공 - 게임 종료
     setTimeout(() => {
-        if (running && !gameOver) {
-            spawnBall();
-        }
-    }, 500);
+        running = false;
+        gameOver = true;
+        document.getElementById('game-over-text').textContent = 'ESCAPED!';
+        document.getElementById('final-score').textContent = '';
+        document.getElementById('game-over').style.display = 'flex';
+    }, 1000);
 }
 
 function endGame() {
@@ -491,16 +485,6 @@ function draw() {
     ctx.stroke();
     ctx.shadowBlur = 0;
 
-    // 갭 표시 (빛나는 효과)
-    ctx.strokeStyle = '#4ecdc4';
-    ctx.lineWidth = 5;
-    ctx.shadowColor = '#4ecdc4';
-    ctx.shadowBlur = 20;
-    ctx.beginPath();
-    ctx.arc(CENTER.x, CENTER.y, CIRCLE_RADIUS, circleAngle, circleAngle + GAP_SIZE);
-    ctx.stroke();
-    ctx.shadowBlur = 0;
-
     // 장애물 (얼어붙은 공들)
     obstacles.forEach(obs => {
         ctx.fillStyle = '#444';
@@ -512,19 +496,41 @@ function draw() {
         ctx.stroke();
     });
 
+    // 파티클
+    particles.forEach(p => {
+        p.x += p.vx;
+        p.y += p.vy;
+        p.life -= 0.02;
+        ctx.globalAlpha = p.life;
+        ctx.fillStyle = p.color;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.size * p.life, 0, Math.PI * 2);
+        ctx.fill();
+    });
+    ctx.globalAlpha = 1;
+    particles = particles.filter(p => p.life > 0);
+
     // 현재 공
     if (ball) {
         ball.draw();
     }
 
-    // 타이머 시각화 (원 주변)
+    // 상단 안내 문구
+    if (running && !gameOver) {
+        ctx.font = '14px "Courier New", monospace';
+        ctx.textAlign = 'center';
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.6)';
+        ctx.fillText('Each ball has only 4 seconds to escape', CENTER.x, 40);
+    }
+
+    // 타이머 (가운데 큰 숫자)
     if (running && !gameOver && ball && !ball.frozen) {
-        const timerRatio = timeLeft / TIME_LIMIT;
-        ctx.strokeStyle = timerRatio > 0.3 ? '#4ecdc4' : '#ff6b6b';
-        ctx.lineWidth = 3;
-        ctx.beginPath();
-        ctx.arc(CENTER.x, CENTER.y, CIRCLE_RADIUS + 15, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * timerRatio);
-        ctx.stroke();
+        const seconds = Math.ceil(timeLeft);
+        ctx.font = 'bold 140px "Courier New", monospace';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillStyle = `rgba(255, 255, 255, ${0.12 + (timeLeft % 1) * 0.08})`;
+        ctx.fillText(seconds, CENTER.x, CENTER.y);
     }
 }
 
@@ -569,11 +575,13 @@ function start() {
     score = 0;
     obstacles = [];
     circleAngle = 0;
-    circleSpeed = 0.02;
+    circleSpeed = 0;
+    circleStarted = false;
     melodyIndex = 0;
     noteInPair = 0;
     gameOver = false;
     running = true;
+    particles = [];
 
     document.getElementById('score').textContent = '0';
 
