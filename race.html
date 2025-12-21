@@ -1,0 +1,514 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Marble Race</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            background: #000;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            overflow: hidden;
+        }
+        #game-container {
+            position: relative;
+            width: 360px;
+            height: 640px;
+            overflow: hidden;
+        }
+        canvas { display: block; }
+        #start-screen {
+            position: absolute;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+            background: rgba(0,0,0,0.85);
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            z-index: 10;
+        }
+        #start-text {
+            font-family: 'Arial', sans-serif;
+            font-size: 24px;
+            color: #fff;
+            letter-spacing: 4px;
+            animation: pulse 1.5s ease-in-out infinite;
+        }
+        #title {
+            font-family: 'Arial', sans-serif;
+            font-size: 32px;
+            font-weight: bold;
+            color: #fff;
+            margin-bottom: 40px;
+            letter-spacing: 2px;
+        }
+        @keyframes pulse {
+            0%, 100% { opacity: 0.5; }
+            50% { opacity: 1; }
+        }
+        #winner-screen {
+            position: absolute;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+            background: rgba(0,0,0,0.9);
+            display: none;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            z-index: 20;
+        }
+        #winner-text {
+            font-family: 'Arial', sans-serif;
+            font-size: 24px;
+            color: #fff;
+            margin-bottom: 20px;
+            letter-spacing: 3px;
+        }
+        #winner-ball {
+            width: 80px;
+            height: 80px;
+            border-radius: 50%;
+            animation: bounce 0.5s ease-in-out infinite alternate;
+        }
+        @keyframes bounce {
+            from { transform: translateY(0); }
+            to { transform: translateY(-20px); }
+        }
+        #positions {
+            position: absolute;
+            top: 15px;
+            left: 15px;
+            font-family: 'Arial', sans-serif;
+            font-size: 14px;
+            color: #fff;
+            z-index: 5;
+        }
+        .pos-item {
+            display: flex;
+            align-items: center;
+            margin-bottom: 8px;
+        }
+        .pos-dot {
+            width: 16px;
+            height: 16px;
+            border-radius: 50%;
+            margin-right: 8px;
+        }
+    </style>
+</head>
+<body>
+    <div id="game-container">
+        <canvas id="canvas"></canvas>
+        <div id="positions"></div>
+        <div id="start-screen">
+            <div id="title">MARBLE RACE</div>
+            <div id="start-text">TAP TO START</div>
+        </div>
+        <div id="winner-screen">
+            <div id="winner-text">WINNER</div>
+            <div id="winner-ball"></div>
+        </div>
+    </div>
+
+<script>
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+const W = 360, H = 640;
+canvas.width = W;
+canvas.height = H;
+
+const COLORS = ['#ff6b6b', '#4ecdc4', '#ffe66d', '#a29bfe'];
+const NOTES = [261.6, 329.6, 392.0, 523.3]; // C4, E4, G4, C5
+const GRAVITY = 0.15;
+const FRICTION = 0.99;
+const BOUNCE = 0.7;
+
+let audioCtx = null;
+let marbles = [];
+let platforms = [];
+let running = false;
+let winner = null;
+let finishY = 0;
+
+// ========== AUDIO ==========
+
+function initAudio() {
+    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+}
+
+function playBounce(marbleIndex, intensity = 1) {
+    if (!audioCtx) return;
+
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(NOTES[marbleIndex] * (1 + intensity * 0.2), audioCtx.currentTime);
+    osc.frequency.exponentialRampToValueAtTime(NOTES[marbleIndex] * 0.5, audioCtx.currentTime + 0.15);
+
+    gain.gain.setValueAtTime(0.3 * intensity, audioCtx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.15);
+
+    osc.connect(gain);
+    gain.connect(audioCtx.destination);
+    osc.start();
+    osc.stop(audioCtx.currentTime + 0.15);
+}
+
+function playRoll(marbleIndex) {
+    if (!audioCtx) return;
+
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+
+    osc.type = 'triangle';
+    osc.frequency.value = NOTES[marbleIndex] * 0.5;
+
+    gain.gain.value = 0.05;
+
+    osc.connect(gain);
+    gain.connect(audioCtx.destination);
+    osc.start();
+    osc.stop(audioCtx.currentTime + 0.05);
+}
+
+function playWinSound() {
+    if (!audioCtx) return;
+
+    const melody = [523.3, 659.3, 784.0, 1046.5];
+    melody.forEach((freq, i) => {
+        setTimeout(() => {
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+
+            osc.type = 'sine';
+            osc.frequency.value = freq;
+
+            gain.gain.setValueAtTime(0.3, audioCtx.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.3);
+
+            osc.connect(gain);
+            gain.connect(audioCtx.destination);
+            osc.start();
+            osc.stop(audioCtx.currentTime + 0.3);
+        }, i * 120);
+    });
+}
+
+// ========== TRACK ==========
+
+function createTrack() {
+    platforms = [];
+
+    const startY = 80;
+    finishY = H - 60;
+
+    // 지그재그 플랫폼 생성
+    let y = startY + 60;
+    let leftSide = true;
+
+    while (y < finishY - 80) {
+        const platWidth = 120 + Math.random() * 60;
+        const x = leftSide ? 20 : W - platWidth - 20;
+
+        platforms.push({
+            x: x,
+            y: y,
+            w: platWidth,
+            h: 8,
+            angle: leftSide ? 0.15 : -0.15 // 살짝 기울임
+        });
+
+        y += 70 + Math.random() * 30;
+        leftSide = !leftSide;
+    }
+
+    // 벽 추가
+    platforms.push({ x: 0, y: 0, w: 10, h: H, angle: 0, isWall: true }); // 왼쪽 벽
+    platforms.push({ x: W - 10, y: 0, w: 10, h: H, angle: 0, isWall: true }); // 오른쪽 벽
+}
+
+// ========== MARBLE ==========
+
+class Marble {
+    constructor(x, y, colorIndex) {
+        this.x = x;
+        this.y = y;
+        this.vx = (Math.random() - 0.5) * 2;
+        this.vy = 0;
+        this.radius = 12;
+        this.colorIndex = colorIndex;
+        this.finished = false;
+        this.finishTime = 0;
+        this.lastBounceTime = 0;
+        this.rotation = 0;
+    }
+
+    update() {
+        if (this.finished) return;
+
+        // 중력
+        this.vy += GRAVITY;
+
+        // 이동
+        this.x += this.vx;
+        this.y += this.vy;
+
+        // 마찰
+        this.vx *= FRICTION;
+
+        // 회전 (굴러가는 효과)
+        this.rotation += this.vx * 0.1;
+
+        // 플랫폼 충돌
+        platforms.forEach(plat => {
+            if (plat.isWall) {
+                // 벽 충돌
+                if (plat.x === 0 && this.x - this.radius < plat.w) {
+                    this.x = plat.w + this.radius;
+                    this.vx = Math.abs(this.vx) * BOUNCE;
+                    this.bounce(0.5);
+                }
+                if (plat.x > 0 && this.x + this.radius > plat.x) {
+                    this.x = plat.x - this.radius;
+                    this.vx = -Math.abs(this.vx) * BOUNCE;
+                    this.bounce(0.5);
+                }
+            } else {
+                // 플랫폼 충돌
+                if (this.x + this.radius > plat.x &&
+                    this.x - this.radius < plat.x + plat.w &&
+                    this.y + this.radius > plat.y &&
+                    this.y - this.radius < plat.y + plat.h) {
+
+                    // 위에서 떨어짐
+                    if (this.vy > 0 && this.y - this.radius < plat.y) {
+                        this.y = plat.y - this.radius;
+                        this.vy = -this.vy * BOUNCE;
+                        this.vx += plat.angle * 3; // 기울기에 따라 굴러감
+                        this.bounce(Math.abs(this.vy) / 5);
+                    }
+                }
+            }
+        });
+
+        // 결승선 체크
+        if (this.y > finishY && !this.finished) {
+            this.finished = true;
+            this.finishTime = Date.now();
+        }
+
+        // 롤링 사운드 (가끔)
+        if (Math.abs(this.vx) > 1 && Math.random() < 0.02) {
+            playRoll(this.colorIndex);
+        }
+    }
+
+    bounce(intensity) {
+        const now = Date.now();
+        if (now - this.lastBounceTime > 50) {
+            playBounce(this.colorIndex, Math.min(intensity, 1));
+            this.lastBounceTime = now;
+        }
+    }
+
+    draw() {
+        ctx.save();
+        ctx.translate(this.x, this.y);
+        ctx.rotate(this.rotation);
+
+        // 공 그림자
+        ctx.fillStyle = 'rgba(0,0,0,0.3)';
+        ctx.beginPath();
+        ctx.ellipse(2, 2, this.radius, this.radius * 0.8, 0, 0, Math.PI * 2);
+        ctx.fill();
+
+        // 공 본체
+        const gradient = ctx.createRadialGradient(-3, -3, 0, 0, 0, this.radius);
+        gradient.addColorStop(0, '#fff');
+        gradient.addColorStop(0.3, COLORS[this.colorIndex]);
+        gradient.addColorStop(1, COLORS[this.colorIndex]);
+
+        ctx.fillStyle = gradient;
+        ctx.beginPath();
+        ctx.arc(0, 0, this.radius, 0, Math.PI * 2);
+        ctx.fill();
+
+        // 하이라이트
+        ctx.fillStyle = 'rgba(255,255,255,0.6)';
+        ctx.beginPath();
+        ctx.arc(-4, -4, 4, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.restore();
+    }
+}
+
+// ========== GAME ==========
+
+function createMarbles() {
+    marbles = [];
+    const startY = 50;
+    const spacing = 50;
+
+    for (let i = 0; i < 4; i++) {
+        const x = 100 + i * spacing;
+        marbles.push(new Marble(x, startY, i));
+    }
+}
+
+function getPositions() {
+    // Y 위치로 순위 결정
+    const sorted = [...marbles].sort((a, b) => {
+        if (a.finished && b.finished) return a.finishTime - b.finishTime;
+        if (a.finished) return -1;
+        if (b.finished) return 1;
+        return b.y - a.y;
+    });
+    return sorted;
+}
+
+function updatePositions() {
+    const positions = getPositions();
+    const container = document.getElementById('positions');
+    container.innerHTML = '';
+
+    positions.forEach((marble, idx) => {
+        const div = document.createElement('div');
+        div.className = 'pos-item';
+        div.innerHTML = `
+            <div class="pos-dot" style="background:${COLORS[marble.colorIndex]}"></div>
+            <span>${idx + 1}${idx === 0 ? 'st' : idx === 1 ? 'nd' : idx === 2 ? 'rd' : 'th'}</span>
+        `;
+        container.appendChild(div);
+    });
+}
+
+function draw() {
+    // 배경
+    ctx.fillStyle = '#111';
+    ctx.fillRect(0, 0, W, H);
+
+    // 스타트 라인
+    ctx.strokeStyle = '#fff';
+    ctx.lineWidth = 2;
+    ctx.setLineDash([10, 5]);
+    ctx.beginPath();
+    ctx.moveTo(30, 70);
+    ctx.lineTo(W - 30, 70);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // 피니시 라인
+    ctx.fillStyle = '#fff';
+    for (let i = 0; i < 18; i++) {
+        for (let j = 0; j < 2; j++) {
+            if ((i + j) % 2 === 0) {
+                ctx.fillRect(i * 20, finishY + j * 10, 20, 10);
+            }
+        }
+    }
+
+    // 플랫폼
+    platforms.forEach(plat => {
+        if (plat.isWall) return;
+
+        ctx.save();
+        ctx.translate(plat.x + plat.w / 2, plat.y + plat.h / 2);
+        ctx.rotate(plat.angle);
+
+        ctx.fillStyle = '#fff';
+        ctx.fillRect(-plat.w / 2, -plat.h / 2, plat.w, plat.h);
+
+        // 플랫폼 하이라이트
+        ctx.fillStyle = 'rgba(255,255,255,0.3)';
+        ctx.fillRect(-plat.w / 2, -plat.h / 2, plat.w, 2);
+
+        ctx.restore();
+    });
+
+    // 벽
+    ctx.fillStyle = '#333';
+    ctx.fillRect(0, 0, 10, H);
+    ctx.fillRect(W - 10, 0, 10, H);
+
+    // 구슬
+    marbles.forEach(m => m.draw());
+}
+
+function gameLoop() {
+    if (!running) return;
+
+    marbles.forEach(m => m.update());
+    updatePositions();
+
+    // 승자 체크
+    const finished = marbles.filter(m => m.finished);
+    if (finished.length > 0 && !winner) {
+        const positions = getPositions();
+        winner = positions[0];
+        setTimeout(() => {
+            showWinner(winner);
+        }, 500);
+    }
+
+    draw();
+    requestAnimationFrame(gameLoop);
+}
+
+function showWinner(marble) {
+    running = false;
+    playWinSound();
+
+    document.getElementById('winner-ball').style.background = COLORS[marble.colorIndex];
+    document.getElementById('winner-screen').style.display = 'flex';
+}
+
+function start() {
+    document.getElementById('start-screen').style.display = 'none';
+    initAudio();
+
+    createTrack();
+    createMarbles();
+
+    running = true;
+    winner = null;
+
+    // 3, 2, 1 카운트다운 후 시작
+    let count = 3;
+    const countdown = setInterval(() => {
+        if (count > 0) {
+            playBounce(0, 0.5);
+            count--;
+        } else {
+            clearInterval(countdown);
+            playWinSound();
+            gameLoop();
+        }
+    }, 500);
+
+    draw();
+}
+
+function init() {
+    createTrack();
+    draw();
+
+    const ss = document.getElementById('start-screen');
+    ss.addEventListener('click', () => { if (!running && !winner) start(); });
+    ss.addEventListener('touchstart', (e) => {
+        e.preventDefault();
+        if (!running && !winner) start();
+    });
+}
+
+window.onload = init;
+</script>
+</body>
+</html>
