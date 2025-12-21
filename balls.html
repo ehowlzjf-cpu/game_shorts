@@ -482,8 +482,9 @@ class Ball {
             }
         });
 
-        if (capturedCount > 0) {
+        if (capturedCount > 0 || polygon.length > 30) {
             playEnclosureSound();
+            addCompletedShape(polygon, this.colorIndex);
         }
 
         // 폐곡선 안의 다른 공 제거
@@ -550,6 +551,48 @@ class Ball {
 
 // 사망 파티클
 let deathParticles = [];
+
+// 완성된 도형 표시
+let completedShapes = [];
+
+function addCompletedShape(polygon, colorIndex) {
+    completedShapes.push({
+        polygon: [...polygon],
+        color: COLORS[colorIndex],
+        life: 30,
+        maxLife: 30
+    });
+}
+
+function updateCompletedShapes() {
+    completedShapes.forEach(s => s.life--);
+    completedShapes = completedShapes.filter(s => s.life > 0);
+}
+
+function drawCompletedShapes() {
+    completedShapes.forEach(s => {
+        const alpha = s.life / s.maxLife;
+
+        // 도형 채우기
+        ctx.fillStyle = s.color;
+        ctx.globalAlpha = alpha * 0.5;
+        ctx.beginPath();
+        ctx.moveTo(s.polygon[0].x, s.polygon[0].y);
+        for (let i = 1; i < s.polygon.length; i++) {
+            ctx.lineTo(s.polygon[i].x, s.polygon[i].y);
+        }
+        ctx.closePath();
+        ctx.fill();
+
+        // 도형 테두리 (밝게)
+        ctx.strokeStyle = '#fff';
+        ctx.lineWidth = 4;
+        ctx.globalAlpha = alpha;
+        ctx.stroke();
+
+        ctx.globalAlpha = 1;
+    });
+}
 
 function spawnDeathParticles(x, y, colorIndex) {
     for (let i = 0; i < 12; i++) {
@@ -685,6 +728,9 @@ function draw() {
     ctx.closePath();
     ctx.stroke();
 
+    // 완성된 도형 표시
+    drawCompletedShapes();
+
     // 공들
     balls.forEach(b => b.draw());
 
@@ -697,6 +743,7 @@ function gameLoop() {
 
     balls.forEach(b => b.update());
     updateDeathParticles();
+    updateCompletedShapes();
     updateScoreboard();
 
     // 살아있는 공이 1개면 승리
