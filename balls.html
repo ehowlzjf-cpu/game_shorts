@@ -87,6 +87,18 @@
             0%, 100% { transform: scale(1); }
             50% { transform: scale(1.2); }
         }
+        #description {
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            right: 20px;
+            text-align: center;
+            font-family: 'Arial', sans-serif;
+            font-size: 11px;
+            color: rgba(255,255,255,0.6);
+            line-height: 1.6;
+            z-index: 5;
+        }
     </style>
 </head>
 <body>
@@ -104,6 +116,10 @@
         <div id="winner-screen">
             <div id="winner-text">WINNER!</div>
             <div id="winner-color"></div>
+        </div>
+        <div id="description">
+            벽 터치 = 분열 ✦ 다른 색 4번 충돌 = 파괴<br>
+            먼저 150개 달성한 색이 승리!
         </div>
     </div>
 
@@ -123,10 +139,10 @@ const ARENA = {
 
 // 공 색상
 const COLORS = ['#ff6b6b', '#4ecdc4', '#ffe66d', '#a29bfe'];
-const BALL_RADIUS = 8;
-const BALL_SPEED = 3;
-const WIN_COUNT = 100;
-const MAX_HITS = 3;
+const BALL_RADIUS = 7;
+const BALL_SPEED = 2.5;
+const WIN_COUNT = 150;
+const MAX_HITS = 4;
 
 let audioCtx = null;
 let balls = [];
