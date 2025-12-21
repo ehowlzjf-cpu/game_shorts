@@ -133,7 +133,7 @@ canvas.height = H;
 const CENTER = { x: W / 2, y: H / 2 };
 const CIRCLE_RADIUS = 120;
 const BALL_RADIUS = 8;
-const GAP_SIZE = 0.4; // 라디안
+const GAP_SIZE = 0.6; // 라디안 (더 큰 출구)
 const TIME_LIMIT = 4;
 
 // 멜로디: 라미라미 시미시미 도미도미 레미레미
@@ -178,29 +178,44 @@ function initAudio() {
 function playNote(freq1, freq2) {
     if (!audioCtx) return;
 
-    // 첫번째 음
+    // 청아한 벨 소리를 위한 설정
+    const now = audioCtx.currentTime;
+
+    // 메인 음 (한 옥타브 높게)
     const osc1 = audioCtx.createOscillator();
     const gain1 = audioCtx.createGain();
     osc1.type = 'sine';
-    osc1.frequency.value = freq1;
-    gain1.gain.setValueAtTime(0.3, audioCtx.currentTime);
-    gain1.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.5);
+    osc1.frequency.value = freq1 * 2;
+    gain1.gain.setValueAtTime(0.15, now);
+    gain1.gain.exponentialRampToValueAtTime(0.001, now + 0.8);
     osc1.connect(gain1);
     gain1.connect(audioCtx.destination);
-    osc1.start();
-    osc1.stop(audioCtx.currentTime + 0.5);
+    osc1.start(now);
+    osc1.stop(now + 0.8);
 
-    // 두번째 음 (화음)
+    // 화음 (한 옥타브 높게)
     const osc2 = audioCtx.createOscillator();
     const gain2 = audioCtx.createGain();
     osc2.type = 'sine';
-    osc2.frequency.value = freq2;
-    gain2.gain.setValueAtTime(0.2, audioCtx.currentTime);
-    gain2.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.5);
+    osc2.frequency.value = freq2 * 2;
+    gain2.gain.setValueAtTime(0.12, now);
+    gain2.gain.exponentialRampToValueAtTime(0.001, now + 0.8);
     osc2.connect(gain2);
     gain2.connect(audioCtx.destination);
-    osc2.start();
-    osc2.stop(audioCtx.currentTime + 0.5);
+    osc2.start(now);
+    osc2.stop(now + 0.8);
+
+    // 하모닉 (벨 느낌)
+    const osc3 = audioCtx.createOscillator();
+    const gain3 = audioCtx.createGain();
+    osc3.type = 'sine';
+    osc3.frequency.value = freq1 * 4;
+    gain3.gain.setValueAtTime(0.05, now);
+    gain3.gain.exponentialRampToValueAtTime(0.001, now + 0.4);
+    osc3.connect(gain3);
+    gain3.connect(audioCtx.destination);
+    osc3.start(now);
+    osc3.stop(now + 0.4);
 }
 
 function playBounceSound() {
@@ -252,8 +267,8 @@ class Ball {
     constructor() {
         this.x = CENTER.x;
         this.y = CENTER.y;
-        this.vx = (Math.random() - 0.5) * 7;
-        this.vy = (Math.random() - 0.5) * 7;
+        this.vx = (Math.random() - 0.5) * 5;
+        this.vy = (Math.random() - 0.5) * 5;
         this.radius = BALL_RADIUS;
         this.frozen = false;
     }
@@ -441,19 +456,46 @@ function draw() {
         ctx.fill();
     });
 
-    // 회전하는 원 (갭 있음)
-    ctx.strokeStyle = '#3a3a5a';
-    ctx.lineWidth = 8;
+    // 회전하는 원 (그라데이션)
+    const arcStart = circleAngle + GAP_SIZE;
+    const arcEnd = circleAngle + Math.PI * 2;
+    const segments = 60;
+    const segmentAngle = (arcEnd - arcStart) / segments;
+
+    ctx.lineWidth = 6;
+    ctx.lineCap = 'round';
+
+    for (let i = 0; i < segments; i++) {
+        const t = i / segments;
+        const startA = arcStart + i * segmentAngle;
+        const endA = startA + segmentAngle + 0.02;
+
+        // 보라-청록 그라데이션
+        const r = Math.floor(138 + t * 40);
+        const g = Math.floor(43 + t * 162);
+        const b = Math.floor(226 - t * 30);
+        ctx.strokeStyle = `rgb(${r}, ${g}, ${b})`;
+
+        ctx.beginPath();
+        ctx.arc(CENTER.x, CENTER.y, CIRCLE_RADIUS, startA, endA);
+        ctx.stroke();
+    }
+
+    // 원 외곽 글로우
+    ctx.shadowColor = '#8a2be2';
+    ctx.shadowBlur = 20;
+    ctx.strokeStyle = 'rgba(138, 43, 226, 0.3)';
+    ctx.lineWidth = 12;
     ctx.beginPath();
-    ctx.arc(CENTER.x, CENTER.y, CIRCLE_RADIUS, circleAngle + GAP_SIZE, circleAngle + Math.PI * 2);
+    ctx.arc(CENTER.x, CENTER.y, CIRCLE_RADIUS, arcStart, arcEnd);
     ctx.stroke();
+    ctx.shadowBlur = 0;
 
     // 갭 표시 (빛나는 효과)
     ctx.strokeStyle = '#4ecdc4';
-    ctx.lineWidth = 4;
+    ctx.lineWidth = 5;
     ctx.shadowColor = '#4ecdc4';
-    ctx.shadowBlur = 15;
-    const gapMid = circleAngle + GAP_SIZE / 2;
+    ctx.shadowBlur = 20;
     ctx.beginPath();
     ctx.arc(CENTER.x, CENTER.y, CIRCLE_RADIUS, circleAngle, circleAngle + GAP_SIZE);
     ctx.stroke();
