@@ -118,8 +118,8 @@
             <div id="winner-color"></div>
         </div>
         <div id="description">
-            Wall = Split ✦ 4 hits = Break<br>
-            Last place splits x3 ✦ Reach 150 to win!
+            Wall = Split ✦ 4 hits = Convert<br>
+            Last place splits x3 ✦ Dominate all to win!
         </div>
     </div>
 
@@ -396,10 +396,17 @@ function updateScoreboard() {
 
 function checkWinner() {
     const counts = countBalls();
+    // 한 색만 남으면 승리
+    let aliveColors = 0;
+    let winnerColor = -1;
     for (let i = 0; i < 4; i++) {
-        if (counts[i] >= WIN_COUNT) {
-            return i;
+        if (counts[i] > 0) {
+            aliveColors++;
+            winnerColor = i;
         }
+    }
+    if (aliveColors === 1) {
+        return winnerColor;
     }
     return null;
 }
@@ -455,18 +462,20 @@ function handleCollisions() {
 
                 playBounceSound();
 
-                // 4번 맞으면 죽음 + 상대 hit 초기화
+                // 4번 맞으면 상대 색으로 변환!
                 if (a.hits >= MAX_HITS) {
-                    a.dead = true;
-                    b.hits = 0; // 상대 초기화 (보상)
+                    spawnParticles(a.x, a.y, a.colorIndex); // 기존 색 파티클
+                    a.colorIndex = b.colorIndex; // 색 변환
+                    a.hits = 0;
+                    b.hits = 0;
                     playBreakSound();
-                    spawnParticles(a.x, a.y, a.colorIndex);
                 }
                 if (b.hits >= MAX_HITS) {
-                    b.dead = true;
-                    a.hits = 0; // 상대 초기화 (보상)
+                    spawnParticles(b.x, b.y, b.colorIndex); // 기존 색 파티클
+                    b.colorIndex = a.colorIndex; // 색 변환
+                    b.hits = 0;
+                    a.hits = 0;
                     playBreakSound();
-                    spawnParticles(b.x, b.y, b.colorIndex);
                 }
             }
         }
