@@ -158,6 +158,7 @@ let ballBody = null;
 let ballMesh = null;
 let cubes = [];
 let dropped = false;
+let cameraFollowing = true;
 
 // ========== AUDIO ==========
 
@@ -244,6 +245,7 @@ function createInvertedPyramid() {
     const cubeSize = 0.8;
     const spacing = 0.05;
     const layers = 10;
+    const groundY = -1; // 바닥 위치
 
     // 역피라미드: 1층(바닥)=1개, 2층=4개, 3층=9개 ... 10층=100개
     // 재사용 가능한 geometry와 material 생성 (성능 최적화)
@@ -252,7 +254,8 @@ function createInvertedPyramid() {
 
     for (let layer = 0; layer < layers; layer++) {
         const cubesPerSide = layer + 1; // 1, 2, 3, ..., 10
-        const layerY = layer * (cubeSize + spacing);
+        // 바닥 바로 위에서 시작 (groundY + cubeSize/2 = 첫 번째 큐브 중심)
+        const layerY = groundY + cubeSize/2 + layer * (cubeSize + spacing);
 
         for (let i = 0; i < cubesPerSide; i++) {
             for (let j = 0; j < cubesPerSide; j++) {
@@ -269,11 +272,14 @@ function createInvertedPyramid() {
                 // 물리 바디
                 const shape = new CANNON.Box(new CANNON.Vec3(cubeSize/2, cubeSize/2, cubeSize/2));
                 const body = new CANNON.Body({
-                    mass: 0.1,
+                    mass: 0.2, // 질량을 약간 늘려서 안정성 향상
                     shape: shape,
-                    material: new CANNON.Material({ friction: 0.3, restitution: 0.3 })
+                    material: new CANNON.Material({ friction: 0.5, restitution: 0.2 }),
+                    sleepSpeedLimit: 0.1, // 느리게 움직이면 sleep 상태로
+                    sleepTimeLimit: 0.5
                 });
                 body.position.set(x, layerY, z);
+                body.allowSleep = true; // sleep 모드 활성화로 안정성 향상
                 world.addBody(body);
 
                 cubes.push({ mesh: cube, body: body });
@@ -384,6 +390,7 @@ function resetGame() {
     createSteelBall();
 
     dropped = false;
+    cameraFollowing = true;
     document.getElementById('status').textContent = '준비 완료!';
     document.getElementById('reset-btn').style.display = 'none';
 
@@ -404,6 +411,25 @@ function animate() {
         if (ballMesh && ballBody) {
             ballMesh.position.copy(ballBody.position);
             ballMesh.quaternion.copy(ballBody.quaternion);
+
+            // 카메라가 공을 따라감 (부딪히기 전까지)
+            if (cameraFollowing) {
+                const offset = new THREE.Vector3(8, 5, 12);
+                camera.position.set(
+                    ballBody.position.x + offset.x,
+                    ballBody.position.y + offset.y,
+                    ballBody.position.z + offset.z
+                );
+                camera.lookAt(ballBody.position.x, ballBody.position.y, ballBody.position.z);
+
+                // 공이 피라미드 높이 근처에 도달하면 카메라 고정
+                if (ballBody.position.y < 2.5) {
+                    cameraFollowing = false;
+                    // 전체를 보여주는 카메라 위치로 전환
+                    camera.position.set(8, 8, 18);
+                    camera.lookAt(0, 3, 0);
+                }
+            }
 
             // 롤링 사운드
             if (ballBody.velocity.length() > 0.5) {
