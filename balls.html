@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Ball Battle</title>
+    <title>Territory Battle</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
@@ -50,13 +50,13 @@
             display: flex;
             justify-content: space-around;
             font-family: 'Arial', sans-serif;
-            font-size: 14px;
+            font-size: 12px;
             font-weight: bold;
             z-index: 5;
         }
         .score {
-            padding: 5px 10px;
-            border-radius: 15px;
+            padding: 4px 8px;
+            border-radius: 10px;
             color: #000;
         }
         #winner-screen {
@@ -89,14 +89,24 @@
         }
         #description {
             position: absolute;
-            bottom: 20px;
-            left: 20px;
-            right: 20px;
+            bottom: 15px;
+            left: 10px;
+            right: 10px;
             text-align: center;
             font-family: 'Arial', sans-serif;
-            font-size: 11px;
-            color: rgba(255,255,255,0.6);
-            line-height: 1.6;
+            font-size: 10px;
+            color: rgba(255,255,255,0.5);
+            z-index: 5;
+        }
+        #shape-name {
+            position: absolute;
+            top: 45px;
+            left: 0;
+            right: 0;
+            text-align: center;
+            font-family: 'Arial', sans-serif;
+            font-size: 14px;
+            color: rgba(255,255,255,0.7);
             z-index: 5;
         }
     </style>
@@ -110,6 +120,7 @@
             <div class="score" id="score2" style="background:#ffe66d;">0</div>
             <div class="score" id="score3" style="background:#a29bfe;">0</div>
         </div>
+        <div id="shape-name"></div>
         <div id="start-screen">
             <div id="start-text">TAP TO START</div>
         </div>
@@ -118,8 +129,7 @@
             <div id="winner-color"></div>
         </div>
         <div id="description">
-            Wall = Split ✦ 3 hits = Convert<br>
-            Dominate all to win!
+            Capture 80 zones to win!
         </div>
     </div>
 
@@ -130,41 +140,125 @@ const W = 360, H = 640;
 canvas.width = W;
 canvas.height = H;
 
-// 경기장 설정
-const ARENA = {
-    x: W / 2,
-    y: H / 2,
-    radius: 150
-};
-
-// 공 색상
+const CENTER = { x: W / 2, y: H / 2 };
 const COLORS = ['#ff6b6b', '#4ecdc4', '#ffe66d', '#a29bfe'];
-const BALL_RADIUS = 7;
-const BALL_SPEED = 2.5;
-const MAX_HITS = 3;
+const COLORS_LIGHT = ['rgba(255,107,107,0.3)', 'rgba(78,205,196,0.3)', 'rgba(255,230,109,0.3)', 'rgba(162,155,254,0.3)'];
+const BALL_SPEED = 2;
+const WIN_COUNT = 80;
+const GRID_SIZE = 10; // 10x10 = 100 cells
 
-// 별 모양 설정
-const STAR_POINTS = 5;
-const STAR_OUTER = 150;
-const STAR_INNER = 70;
+let audioCtx = null;
+let balls = [];
+let running = false;
+let winner = null;
+let arenaVertices = [];
+let arenaName = '';
+let grid = []; // 100 cells, each has owner (-1 = none, 0-3 = color)
+let gridCells = []; // cell boundaries
 
-// 별 꼭짓점 계산
-function getStarVertices() {
-    const vertices = [];
-    const cx = ARENA.x;
-    const cy = ARENA.y;
-    for (let i = 0; i < STAR_POINTS * 2; i++) {
-        const angle = (i * Math.PI / STAR_POINTS) - Math.PI / 2;
-        const r = (i % 2 === 0) ? STAR_OUTER : STAR_INNER;
-        vertices.push({
-            x: cx + Math.cos(angle) * r,
-            y: cy + Math.sin(angle) * r
-        });
-    }
-    return vertices;
+// ========== AUDIO ==========
+
+function initAudio() {
+    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    if (audioCtx.state === 'suspended') audioCtx.resume();
 }
 
-// 점이 다각형 안에 있는지 체크
+function playCaptureSound(colorIndex) {
+    if (!audioCtx) return;
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    const baseFreq = [523, 587, 659, 698][colorIndex];
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(baseFreq, audioCtx.currentTime);
+    gain.gain.setValueAtTime(0.15, audioCtx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.1);
+    osc.connect(gain);
+    gain.connect(audioCtx.destination);
+    osc.start();
+    osc.stop(audioCtx.currentTime + 0.1);
+}
+
+function playEnclosureSound() {
+    if (!audioCtx) return;
+    const notes = [523, 659, 784];
+    notes.forEach((freq, i) => {
+        setTimeout(() => {
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            osc.type = 'sine';
+            osc.frequency.value = freq;
+            gain.gain.setValueAtTime(0.2, audioCtx.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.15);
+            osc.connect(gain);
+            gain.connect(audioCtx.destination);
+            osc.start();
+            osc.stop(audioCtx.currentTime + 0.15);
+        }, i * 80);
+    });
+}
+
+function playWinSound() {
+    if (!audioCtx) return;
+    const notes = [523, 659, 784, 1047];
+    notes.forEach((freq, i) => {
+        setTimeout(() => {
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            osc.type = 'sine';
+            osc.frequency.value = freq;
+            gain.gain.setValueAtTime(0.3, audioCtx.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.3);
+            osc.connect(gain);
+            gain.connect(audioCtx.destination);
+            osc.start();
+            osc.stop(audioCtx.currentTime + 0.3);
+        }, i * 150);
+    });
+}
+
+// ========== ARENA SHAPES ==========
+
+const SHAPES = [
+    { name: 'STAR', sides: 5, star: true },
+    { name: 'PENTAGON', sides: 5, star: false },
+    { name: 'HEXAGON', sides: 6, star: false },
+    { name: 'SQUARE', sides: 4, star: false },
+    { name: 'OCTAGON', sides: 8, star: false },
+    { name: 'TRIANGLE', sides: 3, star: false },
+    { name: 'HEPTAGON', sides: 7, star: false },
+];
+
+function generateArena() {
+    const shape = SHAPES[Math.floor(Math.random() * SHAPES.length)];
+    arenaName = shape.name;
+    document.getElementById('shape-name').textContent = arenaName;
+
+    arenaVertices = [];
+    const outerR = 140;
+    const innerR = 60;
+
+    if (shape.star) {
+        // 별 모양
+        for (let i = 0; i < shape.sides * 2; i++) {
+            const angle = (i * Math.PI / shape.sides) - Math.PI / 2;
+            const r = (i % 2 === 0) ? outerR : innerR;
+            arenaVertices.push({
+                x: CENTER.x + Math.cos(angle) * r,
+                y: CENTER.y + Math.sin(angle) * r
+            });
+        }
+    } else {
+        // 일반 다각형
+        for (let i = 0; i < shape.sides; i++) {
+            const angle = (i * 2 * Math.PI / shape.sides) - Math.PI / 2;
+            arenaVertices.push({
+                x: CENTER.x + Math.cos(angle) * outerR,
+                y: CENTER.y + Math.sin(angle) * outerR
+            });
+        }
+    }
+}
+
 function pointInPolygon(px, py, vertices) {
     let inside = false;
     for (let i = 0, j = vertices.length - 1; i < vertices.length; j = i++) {
@@ -177,207 +271,153 @@ function pointInPolygon(px, py, vertices) {
     return inside;
 }
 
-// 가장 가까운 벽과 반사 벡터 계산
-function reflectOffStar(ball) {
-    const vertices = getStarVertices();
-    let minDist = Infinity;
-    let closestNormal = null;
+// ========== GRID SYSTEM ==========
 
-    for (let i = 0; i < vertices.length; i++) {
-        const a = vertices[i];
-        const b = vertices[(i + 1) % vertices.length];
+function initGrid() {
+    grid = [];
+    gridCells = [];
 
-        // 선분에 가장 가까운 점 찾기
-        const dx = b.x - a.x;
-        const dy = b.y - a.y;
-        const len = Math.sqrt(dx * dx + dy * dy);
-        const nx = -dy / len; // 법선 (내부 방향)
-        const ny = dx / len;
+    // 경계 박스 계산
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    arenaVertices.forEach(v => {
+        minX = Math.min(minX, v.x);
+        maxX = Math.max(maxX, v.x);
+        minY = Math.min(minY, v.y);
+        maxY = Math.max(maxY, v.y);
+    });
 
-        // 공에서 선분까지 거리
-        const t = Math.max(0, Math.min(1, ((ball.x - a.x) * dx + (ball.y - a.y) * dy) / (len * len)));
-        const closestX = a.x + t * dx;
-        const closestY = a.y + t * dy;
-        const dist = Math.sqrt((ball.x - closestX) ** 2 + (ball.y - closestY) ** 2);
+    const cellW = (maxX - minX) / GRID_SIZE;
+    const cellH = (maxY - minY) / GRID_SIZE;
 
-        if (dist < minDist) {
-            minDist = dist;
-            // 법선이 중심을 향하도록
-            const toCenterX = ARENA.x - (a.x + b.x) / 2;
-            const toCenterY = ARENA.y - (a.y + b.y) / 2;
-            if (nx * toCenterX + ny * toCenterY < 0) {
-                closestNormal = { x: -nx, y: -ny, dist, closestX, closestY };
-            } else {
-                closestNormal = { x: nx, y: ny, dist, closestX, closestY };
-            }
+    for (let row = 0; row < GRID_SIZE; row++) {
+        for (let col = 0; col < GRID_SIZE; col++) {
+            const cx = minX + (col + 0.5) * cellW;
+            const cy = minY + (row + 0.5) * cellH;
+
+            const cell = {
+                x: minX + col * cellW,
+                y: minY + row * cellH,
+                w: cellW,
+                h: cellH,
+                cx: cx,
+                cy: cy,
+                inside: pointInPolygon(cx, cy, arenaVertices),
+                owner: -1
+            };
+            gridCells.push(cell);
+            grid.push(-1);
         }
     }
-
-    return closestNormal;
 }
 
-let audioCtx = null;
-let balls = [];
-let running = false;
-let winner = null;
-
-// ========== AUDIO ==========
-
-function initAudio() {
-    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-    if (audioCtx.state === 'suspended') audioCtx.resume();
-}
-
-// 벽에 닿을 때 (퐁 - 분열)
-function playSplitSound(colorIndex) {
-    if (!audioCtx) return;
-
-    const osc = audioCtx.createOscillator();
-    const gain = audioCtx.createGain();
-
-    // 색상별 다른 피치
-    const baseFreq = [523, 659, 784, 880][colorIndex]; // C5, E5, G5, A5
-
-    osc.type = 'sine';
-    osc.frequency.setValueAtTime(baseFreq, audioCtx.currentTime);
-    osc.frequency.exponentialRampToValueAtTime(baseFreq * 1.5, audioCtx.currentTime + 0.1);
-
-    gain.gain.setValueAtTime(0.3, audioCtx.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.2);
-
-    osc.connect(gain);
-    gain.connect(audioCtx.destination);
-    osc.start();
-    osc.stop(audioCtx.currentTime + 0.2);
-}
-
-// 깨질 때 (파삭)
-function playBreakSound() {
-    if (!audioCtx) return;
-
-    // 노이즈 버스트
-    const bufferSize = audioCtx.sampleRate * 0.15;
-    const buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
-    const data = buffer.getChannelData(0);
-
-    for (let i = 0; i < bufferSize; i++) {
-        const env = Math.exp(-i / (bufferSize * 0.2));
-        data[i] = (Math.random() * 2 - 1) * env;
+function getCellAt(x, y) {
+    for (let i = 0; i < gridCells.length; i++) {
+        const c = gridCells[i];
+        if (x >= c.x && x < c.x + c.w && y >= c.y && y < c.y + c.h) {
+            return i;
+        }
     }
-
-    const source = audioCtx.createBufferSource();
-    source.buffer = buffer;
-
-    const filter = audioCtx.createBiquadFilter();
-    filter.type = 'highpass';
-    filter.frequency.value = 2000;
-
-    const gain = audioCtx.createGain();
-    gain.gain.value = 0.25;
-
-    source.connect(filter);
-    filter.connect(gain);
-    gain.connect(audioCtx.destination);
-    source.start();
+    return -1;
 }
 
-// 공끼리 부딪힐 때 (통)
-function playBounceSound() {
-    if (!audioCtx) return;
+function captureCell(idx, colorIndex) {
+    if (idx < 0 || idx >= grid.length) return false;
+    if (!gridCells[idx].inside) return false;
+    if (grid[idx] === colorIndex) return false;
 
-    const osc = audioCtx.createOscillator();
-    const gain = audioCtx.createGain();
-
-    osc.type = 'triangle';
-    osc.frequency.setValueAtTime(200, audioCtx.currentTime);
-    osc.frequency.exponentialRampToValueAtTime(100, audioCtx.currentTime + 0.08);
-
-    gain.gain.setValueAtTime(0.2, audioCtx.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.1);
-
-    osc.connect(gain);
-    gain.connect(audioCtx.destination);
-    osc.start();
-    osc.stop(audioCtx.currentTime + 0.1);
-}
-
-// 승리 사운드
-function playWinSound() {
-    if (!audioCtx) return;
-
-    const notes = [523, 659, 784, 1047]; // C5, E5, G5, C6
-    notes.forEach((freq, i) => {
-        setTimeout(() => {
-            const osc = audioCtx.createOscillator();
-            const gain = audioCtx.createGain();
-
-            osc.type = 'sine';
-            osc.frequency.value = freq;
-
-            gain.gain.setValueAtTime(0.3, audioCtx.currentTime);
-            gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.3);
-
-            osc.connect(gain);
-            gain.connect(audioCtx.destination);
-            osc.start();
-            osc.stop(audioCtx.currentTime + 0.3);
-        }, i * 150);
-    });
+    grid[idx] = colorIndex;
+    gridCells[idx].owner = colorIndex;
+    return true;
 }
 
 // ========== BALL CLASS ==========
 
 class Ball {
-    constructor(x, y, vx, vy, colorIndex) {
+    constructor(x, y, colorIndex) {
         this.x = x;
         this.y = y;
-        this.vx = vx;
-        this.vy = vy;
         this.colorIndex = colorIndex;
-        this.radius = BALL_RADIUS;
-        this.hits = 0;
-        this.dead = false;
-        this.justSplit = false;
-        this.wallCooldown = 0; // 벽 충돌 쿨다운
-        this.invincible = 0; // 무적 시간 (새로 생긴 공)
+        this.radius = 6;
+
+        // 랜덤 방향
+        const angle = Math.random() * Math.PI * 2;
+        this.vx = Math.cos(angle) * BALL_SPEED;
+        this.vy = Math.sin(angle) * BALL_SPEED;
+
+        this.trail = []; // 이동 경로
+        this.maxTrail = 100;
     }
 
     update() {
+        // 이전 위치 저장
+        const prevX = this.x;
+        const prevY = this.y;
+
         this.x += this.vx;
         this.y += this.vy;
 
-        if (this.wallCooldown > 0) this.wallCooldown--;
-        if (this.invincible > 0) this.invincible--;
-
-        // 별 모양 벽 충돌 체크
-        const vertices = getStarVertices();
-        const inside = pointInPolygon(this.x, this.y, vertices);
-
-        if (!inside) {
-            // 벽 밖으로 나감 - 반사
-            const ref = reflectOffStar(this);
-            if (ref) {
-                // 위치 보정
-                this.x = ref.closestX + ref.x * (this.radius + 2);
-                this.y = ref.closestY + ref.y * (this.radius + 2);
-
-                // 반사
-                const dot = this.vx * ref.x + this.vy * ref.y;
-                this.vx -= 2 * dot * ref.x;
-                this.vy -= 2 * dot * ref.y;
-
-                // 속력 정규화
-                this.normalizeSpeed();
-
-                // 분열 (쿨다운 없을 때만)
-                if (this.wallCooldown === 0) {
-                    this.justSplit = true;
-                    playSplitSound(this.colorIndex);
-                }
-
-                this.wallCooldown = 10;
-            }
+        // 경로 추가
+        this.trail.push({ x: this.x, y: this.y });
+        if (this.trail.length > this.maxTrail) {
+            this.trail.shift();
         }
+
+        // 벽 충돌
+        if (!pointInPolygon(this.x, this.y, arenaVertices)) {
+            this.x = prevX;
+            this.y = prevY;
+
+            // 반사 (대략적)
+            const toCenterX = CENTER.x - this.x;
+            const toCenterY = CENTER.y - this.y;
+            const len = Math.sqrt(toCenterX * toCenterX + toCenterY * toCenterY);
+
+            // 속도를 중심 방향으로 반사
+            const nx = toCenterX / len;
+            const ny = toCenterY / len;
+
+            // 랜덤 요소 추가
+            const angle = Math.atan2(ny, nx) + (Math.random() - 0.5) * 1;
+            this.vx = Math.cos(angle) * BALL_SPEED;
+            this.vy = Math.sin(angle) * BALL_SPEED;
+        }
+
+        // 현재 셀 점령
+        const cellIdx = getCellAt(this.x, this.y);
+        if (cellIdx >= 0 && captureCell(cellIdx, this.colorIndex)) {
+            playCaptureSound(this.colorIndex);
+        }
+
+        // 공끼리 충돌
+        balls.forEach(other => {
+            if (other === this) return;
+            const dx = other.x - this.x;
+            const dy = other.y - this.y;
+            const dist = Math.sqrt(dx * dx + dy * dy);
+            if (dist < this.radius + other.radius && dist > 0) {
+                // 밀어내기
+                const nx = dx / dist;
+                const ny = dy / dist;
+                const overlap = (this.radius + other.radius - dist) / 2;
+                this.x -= nx * overlap;
+                this.y -= ny * overlap;
+                other.x += nx * overlap;
+                other.y += ny * overlap;
+
+                // 속도 교환
+                const dvx = this.vx - other.vx;
+                const dvy = this.vy - other.vy;
+                const dot = dvx * nx + dvy * ny;
+                this.vx -= dot * nx;
+                this.vy -= dot * ny;
+                other.vx += dot * nx;
+                other.vy += dot * ny;
+
+                // 속도 정규화
+                this.normalizeSpeed();
+                other.normalizeSpeed();
+            }
+        });
     }
 
     normalizeSpeed() {
@@ -389,275 +429,131 @@ class Ball {
     }
 
     draw() {
+        // 경로 그리기
+        if (this.trail.length > 1) {
+            ctx.strokeStyle = COLORS[this.colorIndex];
+            ctx.lineWidth = 2;
+            ctx.globalAlpha = 0.6;
+            ctx.beginPath();
+            ctx.moveTo(this.trail[0].x, this.trail[0].y);
+            for (let i = 1; i < this.trail.length; i++) {
+                ctx.lineTo(this.trail[i].x, this.trail[i].y);
+            }
+            ctx.stroke();
+            ctx.globalAlpha = 1;
+        }
+
+        // 공
         ctx.fillStyle = COLORS[this.colorIndex];
         ctx.beginPath();
         ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
         ctx.fill();
 
-        // 히트 표시 (금 간 효과)
-        if (this.hits > 0) {
-            ctx.strokeStyle = 'rgba(0,0,0,0.5)';
-            ctx.lineWidth = 1;
-            for (let i = 0; i < this.hits; i++) {
-                const angle = (i / MAX_HITS) * Math.PI * 2 + Math.PI / 4;
-                ctx.beginPath();
-                ctx.moveTo(this.x, this.y);
-                ctx.lineTo(
-                    this.x + Math.cos(angle) * this.radius,
-                    this.y + Math.sin(angle) * this.radius
-                );
-                ctx.stroke();
-            }
-        }
+        // 테두리
+        ctx.strokeStyle = '#fff';
+        ctx.lineWidth = 2;
+        ctx.stroke();
     }
 }
 
 // ========== GAME LOGIC ==========
 
-function createInitialBalls() {
+function createBalls() {
     balls = [];
 
+    // 4개 공을 맵 안 랜덤 위치에 배치
+    const positions = [];
     for (let i = 0; i < 4; i++) {
-        const angle = (i / 4) * Math.PI * 2 + Math.PI / 4;
-        const dist = 50;
-        const x = ARENA.x + Math.cos(angle) * dist;
-        const y = ARENA.y + Math.sin(angle) * dist;
-
-        // 랜덤 방향
-        const vAngle = Math.random() * Math.PI * 2;
-        const vx = Math.cos(vAngle) * BALL_SPEED;
-        const vy = Math.sin(vAngle) * BALL_SPEED;
-
-        balls.push(new Ball(x, y, vx, vy, i));
+        let x, y, valid = false;
+        let attempts = 0;
+        while (!valid && attempts < 100) {
+            x = CENTER.x + (Math.random() - 0.5) * 100;
+            y = CENTER.y + (Math.random() - 0.5) * 100;
+            valid = pointInPolygon(x, y, arenaVertices);
+            // 다른 공과 거리 확인
+            positions.forEach(p => {
+                if (Math.sqrt((x - p.x) ** 2 + (y - p.y) ** 2) < 30) valid = false;
+            });
+            attempts++;
+        }
+        positions.push({ x, y });
+        balls.push(new Ball(x, y, i));
     }
 }
 
-function countBalls() {
+function countTerritory() {
     const counts = [0, 0, 0, 0];
-    balls.forEach(b => {
-        if (!b.dead) counts[b.colorIndex]++;
+    grid.forEach((owner, idx) => {
+        if (owner >= 0 && gridCells[idx].inside) {
+            counts[owner]++;
+        }
     });
     return counts;
 }
 
 function updateScoreboard() {
-    const counts = countBalls();
+    const counts = countTerritory();
     for (let i = 0; i < 4; i++) {
         document.getElementById('score' + i).textContent = counts[i];
     }
 }
 
 function checkWinner() {
-    const counts = countBalls();
-    // 한 색만 남으면 승리
-    let aliveColors = 0;
-    let winnerColor = -1;
+    const counts = countTerritory();
     for (let i = 0; i < 4; i++) {
-        if (counts[i] > 0) {
-            aliveColors++;
-            winnerColor = i;
+        if (counts[i] >= WIN_COUNT) {
+            return i;
         }
-    }
-    if (aliveColors === 1) {
-        return winnerColor;
     }
     return null;
-}
-
-function handleCollisions() {
-    // 공끼리 충돌
-    for (let i = 0; i < balls.length; i++) {
-        for (let j = i + 1; j < balls.length; j++) {
-            const a = balls[i];
-            const b = balls[j];
-
-            if (a.dead || b.dead) continue;
-
-            const dx = b.x - a.x;
-            const dy = b.y - a.y;
-            const dist = Math.sqrt(dx * dx + dy * dy);
-            const minDist = a.radius + b.radius;
-
-            if (dist < minDist && dist > 0) {
-                // 충돌!
-                const nx = dx / dist;
-                const ny = dy / dist;
-
-                // 위치 분리
-                const overlap = minDist - dist;
-                a.x -= nx * overlap / 2;
-                a.y -= ny * overlap / 2;
-                b.x += nx * overlap / 2;
-                b.y += ny * overlap / 2;
-
-                // 속도 교환 (탄성 충돌)
-                const dvx = a.vx - b.vx;
-                const dvy = a.vy - b.vy;
-                const dot = dvx * nx + dvy * ny;
-
-                a.vx -= dot * nx;
-                a.vy -= dot * ny;
-                b.vx += dot * nx;
-                b.vy += dot * ny;
-
-                // 속력 정규화
-                a.normalizeSpeed();
-                b.normalizeSpeed();
-
-                // 같은 색이면 히트 카운트 안 침!
-                if (a.colorIndex === b.colorIndex) {
-                    continue;
-                }
-
-                // 다른 색끼리만 히트 카운트 증가
-                a.hits++;
-                b.hits++;
-
-                playBounceSound();
-
-                // 4번 맞으면 상대 색으로 변환!
-                if (a.hits >= MAX_HITS) {
-                    spawnParticles(a.x, a.y, a.colorIndex); // 기존 색 파티클
-                    a.colorIndex = b.colorIndex; // 색 변환
-                    a.hits = 0;
-                    b.hits = 0;
-                    playBreakSound();
-                }
-                if (b.hits >= MAX_HITS) {
-                    spawnParticles(b.x, b.y, b.colorIndex); // 기존 색 파티클
-                    b.colorIndex = a.colorIndex; // 색 변환
-                    b.hits = 0;
-                    a.hits = 0;
-                    playBreakSound();
-                }
-            }
-        }
-    }
-}
-
-function handleSplits() {
-    const newBalls = [];
-
-    balls.forEach(ball => {
-        if (ball.justSplit && !ball.dead) {
-            ball.justSplit = false;
-
-            // 새 공 생성 (반대 방향으로)
-            const angle = Math.atan2(ball.vy, ball.vx);
-            const newAngle = angle + Math.PI + (Math.random() - 0.5) * 0.5;
-
-            // 새 공은 중심 방향으로 살짝 이동
-            const dx = ball.x - ARENA.x;
-            const dy = ball.y - ARENA.y;
-            const dist = Math.sqrt(dx * dx + dy * dy) || 1;
-            const pushX = -(dx / dist) * 15;
-            const pushY = -(dy / dist) * 15;
-
-            const newBall = new Ball(
-                ball.x + pushX,
-                ball.y + pushY,
-                Math.cos(newAngle) * BALL_SPEED,
-                Math.sin(newAngle) * BALL_SPEED,
-                ball.colorIndex
-            );
-            newBall.wallCooldown = 15;
-            newBall.hits = ball.hits; // hit수 그대로 유지
-            newBalls.push(newBall);
-        }
-    });
-
-    balls = balls.concat(newBalls);
-}
-
-// 파티클 효과
-let particles = [];
-
-function spawnParticles(x, y, colorIndex) {
-    for (let i = 0; i < 8; i++) {
-        const angle = (i / 8) * Math.PI * 2;
-        particles.push({
-            x, y,
-            vx: Math.cos(angle) * 3,
-            vy: Math.sin(angle) * 3,
-            life: 30,
-            color: COLORS[colorIndex]
-        });
-    }
-}
-
-function updateParticles() {
-    particles.forEach(p => {
-        p.x += p.vx;
-        p.y += p.vy;
-        p.vx *= 0.95;
-        p.vy *= 0.95;
-        p.life--;
-    });
-    particles = particles.filter(p => p.life > 0);
-}
-
-function drawParticles() {
-    particles.forEach(p => {
-        ctx.fillStyle = p.color;
-        ctx.globalAlpha = p.life / 30;
-        ctx.beginPath();
-        ctx.arc(p.x, p.y, 3, 0, Math.PI * 2);
-        ctx.fill();
-    });
-    ctx.globalAlpha = 1;
 }
 
 // ========== RENDERING ==========
 
 function draw() {
     // 배경
-    ctx.fillStyle = '#000';
+    ctx.fillStyle = '#111';
     ctx.fillRect(0, 0, W, H);
 
-    // 경기장 (별 모양)
-    const vertices = getStarVertices();
+    // 그리드 셀 그리기
+    gridCells.forEach((cell, idx) => {
+        if (!cell.inside) return;
+
+        const owner = grid[idx];
+        if (owner >= 0) {
+            ctx.fillStyle = COLORS_LIGHT[owner];
+        } else {
+            ctx.fillStyle = 'rgba(255,255,255,0.05)';
+        }
+        ctx.fillRect(cell.x, cell.y, cell.w, cell.h);
+
+        // 셀 테두리
+        ctx.strokeStyle = 'rgba(255,255,255,0.1)';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(cell.x, cell.y, cell.w, cell.h);
+    });
+
+    // 경기장 테두리
     ctx.strokeStyle = '#fff';
-    ctx.lineWidth = 4;
+    ctx.lineWidth = 3;
     ctx.beginPath();
-    ctx.moveTo(vertices[0].x, vertices[0].y);
-    for (let i = 1; i < vertices.length; i++) {
-        ctx.lineTo(vertices[i].x, vertices[i].y);
+    ctx.moveTo(arenaVertices[0].x, arenaVertices[0].y);
+    for (let i = 1; i < arenaVertices.length; i++) {
+        ctx.lineTo(arenaVertices[i].x, arenaVertices[i].y);
     }
     ctx.closePath();
     ctx.stroke();
 
-    // 경기장 내부 약간 밝게
-    ctx.fillStyle = 'rgba(255,255,255,0.05)';
-    ctx.fill();
-
     // 공들
-    balls.forEach(b => {
-        if (!b.dead) b.draw();
-    });
-
-    // 파티클
-    drawParticles();
+    balls.forEach(b => b.draw());
 }
 
 function gameLoop() {
     if (!running) return;
 
-    // 업데이트
-    balls.forEach(b => {
-        if (!b.dead) b.update();
-    });
-
-    handleCollisions();
-    handleSplits();
-    updateParticles();
-
-    // 죽은 공 제거
-    balls = balls.filter(b => !b.dead);
-
-    // 스코어보드 업데이트
+    balls.forEach(b => b.update());
     updateScoreboard();
 
-    // 승자 체크
     const w = checkWinner();
     if (w !== null) {
         winner = w;
@@ -671,10 +567,8 @@ function gameLoop() {
 }
 
 function showWinner(colorIndex) {
-    draw(); // 마지막 프레임
-
+    draw();
     playWinSound();
-
     document.getElementById('winner-color').style.background = COLORS[colorIndex];
     document.getElementById('winner-screen').style.display = 'flex';
 }
@@ -682,12 +576,19 @@ function showWinner(colorIndex) {
 function start() {
     document.getElementById('start-screen').style.display = 'none';
     initAudio();
-    createInitialBalls();
+
+    generateArena();
+    initGrid();
+    createBalls();
+
     running = true;
     gameLoop();
 }
 
 function init() {
+    // 프리뷰용 임시 경기장
+    generateArena();
+    initGrid();
     draw();
 
     const ss = document.getElementById('start-screen');
