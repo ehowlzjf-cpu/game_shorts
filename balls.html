@@ -345,8 +345,7 @@ class Ball {
         this.vx = Math.cos(angle) * BALL_SPEED;
         this.vy = Math.sin(angle) * BALL_SPEED;
 
-        this.trail = [{ x, y }]; // 이동 경로 (계속 유지)
-        this.visitedCells = new Set(); // 방문한 셀
+        this.trail = [{ x, y }]; // 이동 경로 (계속 유지!)
     }
 
     update() {
@@ -371,24 +370,23 @@ class Ball {
             const angle = Math.atan2(ny, nx) + (Math.random() - 0.5) * 1;
             this.vx = Math.cos(angle) * BALL_SPEED;
             this.vy = Math.sin(angle) * BALL_SPEED;
-
-            // 벽에 닿으면 도형 완성 시도
-            this.tryCompleteShape();
         }
 
-        // 경로 추가
+        // 경로 추가 (절대 끊기지 않음)
         this.trail.push({ x: this.x, y: this.y });
 
-        // 현재 셀
+        // 현재 셀 점령 (지나가면 바로 먹기)
         const cellIdx = getCellAt(this.x, this.y);
         if (cellIdx >= 0 && gridCells[cellIdx].inside) {
-            // 내 영역으로 돌아왔는지 체크
-            if (grid[cellIdx] === this.colorIndex && this.visitedCells.size > 5) {
-                this.tryCompleteShape();
-            } else if (grid[cellIdx] !== this.colorIndex) {
-                this.visitedCells.add(cellIdx);
+            if (grid[cellIdx] !== this.colorIndex) {
+                grid[cellIdx] = this.colorIndex;
+                gridCells[cellIdx].owner = this.colorIndex;
+                playCaptureSound(this.colorIndex);
             }
         }
+
+        // 도형 완성 체크 (자기 경로와 교차하는지)
+        this.checkSelfIntersection();
 
         // 공끼리 충돌
         balls.forEach(other => {
@@ -419,29 +417,42 @@ class Ball {
         });
     }
 
-    tryCompleteShape() {
-        if (this.trail.length < 10) return;
+    checkSelfIntersection() {
+        if (this.trail.length < 30) return;
 
-        // 경로로 다각형 만들기
-        const polygon = this.trail.slice(-Math.min(this.trail.length, 200));
-        if (polygon.length < 10) return;
+        const current = this.trail[this.trail.length - 1];
 
-        // 폐곡선인지 확인 (시작점과 끝점 가까움)
-        const start = polygon[0];
-        const end = polygon[polygon.length - 1];
-        const dist = Math.sqrt((end.x - start.x) ** 2 + (end.y - start.y) ** 2);
+        // 오래된 경로와 교차하는지 확인
+        for (let i = 0; i < this.trail.length - 20; i++) {
+            const p = this.trail[i];
+            const dist = Math.sqrt((current.x - p.x) ** 2 + (current.y - p.y) ** 2);
+
+            if (dist < 10) {
+                // 교차점 발견! 그 사이를 폐곡선으로
+                const polygon = this.trail.slice(i);
+                this.completeShape(polygon, i);
+                return;
+            }
+        }
+    }
+
+    completeShape(polygon, startIdx) {
+        if (polygon.length < 20) return;
 
         // 도형 내부 셀 점령
         let capturedCount = 0;
+        const capturedCells = [];
+
         gridCells.forEach((cell, idx) => {
             if (!cell.inside) return;
-            if (grid[idx] === this.colorIndex) return;
 
-            // 셀 중심이 경로 다각형 안에 있는지
             if (pointInPolygon(cell.cx, cell.cy, polygon)) {
-                grid[idx] = this.colorIndex;
-                cell.owner = this.colorIndex;
-                capturedCount++;
+                if (grid[idx] !== this.colorIndex) {
+                    grid[idx] = this.colorIndex;
+                    cell.owner = this.colorIndex;
+                    capturedCount++;
+                }
+                capturedCells.push(idx);
             }
         });
 
@@ -456,11 +467,22 @@ class Ball {
                     spawnDeathParticles(other.x, other.y, other.colorIndex);
                 }
             });
+
+            // 도형 안에 있는 다른 공의 실선 제거
+            balls.forEach(other => {
+                if (other === this || other.dead) return;
+                other.trail = other.trail.filter(p => !pointInPolygon(p.x, p.y, polygon));
+                if (other.trail.length === 0) {
+                    other.trail = [{ x: other.x, y: other.y }];
+                }
+            });
         }
 
-        // 경로 리셋
-        this.trail = [{ x: this.x, y: this.y }];
-        this.visitedCells.clear();
+        // 내 경로에서 사용된 부분만 제거 (나머지 유지)
+        this.trail = this.trail.slice(0, startIdx);
+        if (this.trail.length === 0) {
+            this.trail = [{ x: this.x, y: this.y }];
+        }
     }
 
     normalizeSpeed() {
