@@ -386,19 +386,60 @@ class Ball {
         this.x += this.vx;
         this.y += this.vy;
 
-        // 벽 충돌 (반사만, 도형 완성 X)
+        // 벽 충돌 (입사각 = 반사각)
         if (!pointInPolygon(this.x, this.y, arenaVertices)) {
             this.x = prevX;
             this.y = prevY;
 
-            const toCenterX = CENTER.x - this.x;
-            const toCenterY = CENTER.y - this.y;
-            const len = Math.sqrt(toCenterX * toCenterX + toCenterY * toCenterY) || 1;
-            const nx = toCenterX / len;
-            const ny = toCenterY / len;
-            const angle = Math.atan2(ny, nx) + (Math.random() - 0.5) * 0.8;
-            this.vx = Math.cos(angle) * BALL_SPEED;
-            this.vy = Math.sin(angle) * BALL_SPEED;
+            // 가장 가까운 벽 찾기
+            let minDist = Infinity;
+            let wallNormal = { x: 0, y: 0 };
+
+            for (let i = 0; i < arenaVertices.length; i++) {
+                const a = arenaVertices[i];
+                const b = arenaVertices[(i + 1) % arenaVertices.length];
+
+                // 선분 벡터
+                const edgeX = b.x - a.x;
+                const edgeY = b.y - a.y;
+                const edgeLen = Math.sqrt(edgeX * edgeX + edgeY * edgeY);
+
+                // 공에서 선분까지 투영
+                const t = Math.max(0, Math.min(1,
+                    ((this.x - a.x) * edgeX + (this.y - a.y) * edgeY) / (edgeLen * edgeLen)
+                ));
+
+                const closestX = a.x + t * edgeX;
+                const closestY = a.y + t * edgeY;
+                const dist = Math.sqrt((this.x - closestX) ** 2 + (this.y - closestY) ** 2);
+
+                if (dist < minDist) {
+                    minDist = dist;
+                    // 법선 벡터 (선분에 수직, 안쪽 방향)
+                    let nx = -edgeY / edgeLen;
+                    let ny = edgeX / edgeLen;
+
+                    // 법선이 중심을 향하도록
+                    const midX = (a.x + b.x) / 2;
+                    const midY = (a.y + b.y) / 2;
+                    const toCenterX = CENTER.x - midX;
+                    const toCenterY = CENTER.y - midY;
+
+                    if (nx * toCenterX + ny * toCenterY < 0) {
+                        nx = -nx;
+                        ny = -ny;
+                    }
+
+                    wallNormal = { x: nx, y: ny };
+                }
+            }
+
+            // 반사: v' = v - 2(v·n)n
+            const dot = this.vx * wallNormal.x + this.vy * wallNormal.y;
+            this.vx = this.vx - 2 * dot * wallNormal.x;
+            this.vy = this.vy - 2 * dot * wallNormal.y;
+
+            this.normalizeSpeed();
         }
 
         // 실선에 현재 위치 추가 (계속 길어짐)
