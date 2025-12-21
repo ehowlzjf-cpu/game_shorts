@@ -118,8 +118,8 @@
             <div id="winner-color"></div>
         </div>
         <div id="description">
-            벽 터치 = 분열 ✦ 다른 색 4번 충돌 = 파괴<br>
-            먼저 150개 달성한 색이 승리!
+            Wall = Split ✦ 4 hits = Break<br>
+            Last place splits x3 ✦ Reach 150 to win!
         </div>
     </div>
 
@@ -369,6 +369,24 @@ function countBalls() {
     return counts;
 }
 
+function getLeader() {
+    const counts = countBalls();
+    let maxIdx = 0;
+    for (let i = 1; i < 4; i++) {
+        if (counts[i] > counts[maxIdx]) maxIdx = i;
+    }
+    return maxIdx;
+}
+
+function getLoser() {
+    const counts = countBalls();
+    let minIdx = 0;
+    for (let i = 1; i < 4; i++) {
+        if (counts[i] < counts[minIdx]) minIdx = i;
+    }
+    return minIdx;
+}
+
 function updateScoreboard() {
     const counts = countBalls();
     for (let i = 0; i < 4; i++) {
@@ -437,14 +455,16 @@ function handleCollisions() {
 
                 playBounceSound();
 
-                // 3번 맞으면 죽음
+                // 4번 맞으면 죽음 + 상대 hit 초기화
                 if (a.hits >= MAX_HITS) {
                     a.dead = true;
+                    b.hits = 0; // 상대 초기화 (보상)
                     playBreakSound();
                     spawnParticles(a.x, a.y, a.colorIndex);
                 }
                 if (b.hits >= MAX_HITS) {
                     b.dead = true;
+                    a.hits = 0; // 상대 초기화 (보상)
                     playBreakSound();
                     spawnParticles(b.x, b.y, b.colorIndex);
                 }
@@ -455,31 +475,38 @@ function handleCollisions() {
 
 function handleSplits() {
     const newBalls = [];
+    const loser = getLoser();
 
     balls.forEach(ball => {
         if (ball.justSplit && !ball.dead) {
             ball.justSplit = false;
 
-            // 새 공 생성 (반대쪽으로)
-            const angle = Math.atan2(ball.vy, ball.vx);
-            const newAngle = angle + Math.PI + (Math.random() - 0.5) * 0.5;
+            // 꼴찌는 3개로 분열! (역전 기회)
+            const splitCount = (ball.colorIndex === loser) ? 2 : 1;
 
-            // 새 공은 중심 방향으로 살짝 이동
-            const dx = ball.x - ARENA.x;
-            const dy = ball.y - ARENA.y;
-            const dist = Math.sqrt(dx * dx + dy * dy);
-            const pushX = -(dx / dist) * 15;
-            const pushY = -(dy / dist) * 15;
+            for (let s = 0; s < splitCount; s++) {
+                // 새 공 생성 (다양한 방향으로)
+                const angle = Math.atan2(ball.vy, ball.vx);
+                const newAngle = angle + Math.PI + (s - 0.5) * 0.8 + (Math.random() - 0.5) * 0.3;
 
-            const newBall = new Ball(
-                ball.x + pushX,
-                ball.y + pushY,
-                Math.cos(newAngle) * BALL_SPEED,
-                Math.sin(newAngle) * BALL_SPEED,
-                ball.colorIndex
-            );
-            newBall.wallCooldown = 15; // 새 공도 잠시 쿨다운
-            newBalls.push(newBall);
+                // 새 공은 중심 방향으로 살짝 이동
+                const dx = ball.x - ARENA.x;
+                const dy = ball.y - ARENA.y;
+                const dist = Math.sqrt(dx * dx + dy * dy);
+                const pushX = -(dx / dist) * 15;
+                const pushY = -(dy / dist) * 15;
+
+                const newBall = new Ball(
+                    ball.x + pushX,
+                    ball.y + pushY,
+                    Math.cos(newAngle) * BALL_SPEED,
+                    Math.sin(newAngle) * BALL_SPEED,
+                    ball.colorIndex
+                );
+                newBall.wallCooldown = 15;
+                newBall.hits = ball.hits; // hit수 그대로 유지
+                newBalls.push(newBall);
+            }
         }
     });
 
