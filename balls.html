@@ -338,64 +338,65 @@ class Ball {
         this.y = y;
         this.colorIndex = colorIndex;
         this.radius = 6;
+        this.dead = false;
 
         // 랜덤 방향
         const angle = Math.random() * Math.PI * 2;
         this.vx = Math.cos(angle) * BALL_SPEED;
         this.vy = Math.sin(angle) * BALL_SPEED;
 
-        this.trail = []; // 이동 경로
-        this.maxTrail = 100;
+        this.trail = [{ x, y }]; // 이동 경로 (계속 유지)
+        this.visitedCells = new Set(); // 방문한 셀
     }
 
     update() {
-        // 이전 위치 저장
+        if (this.dead) return;
+
         const prevX = this.x;
         const prevY = this.y;
 
         this.x += this.vx;
         this.y += this.vy;
 
-        // 경로 추가
-        this.trail.push({ x: this.x, y: this.y });
-        if (this.trail.length > this.maxTrail) {
-            this.trail.shift();
-        }
-
         // 벽 충돌
         if (!pointInPolygon(this.x, this.y, arenaVertices)) {
             this.x = prevX;
             this.y = prevY;
 
-            // 반사 (대략적)
             const toCenterX = CENTER.x - this.x;
             const toCenterY = CENTER.y - this.y;
             const len = Math.sqrt(toCenterX * toCenterX + toCenterY * toCenterY);
-
-            // 속도를 중심 방향으로 반사
             const nx = toCenterX / len;
             const ny = toCenterY / len;
-
-            // 랜덤 요소 추가
             const angle = Math.atan2(ny, nx) + (Math.random() - 0.5) * 1;
             this.vx = Math.cos(angle) * BALL_SPEED;
             this.vy = Math.sin(angle) * BALL_SPEED;
+
+            // 벽에 닿으면 도형 완성 시도
+            this.tryCompleteShape();
         }
 
-        // 현재 셀 점령
+        // 경로 추가
+        this.trail.push({ x: this.x, y: this.y });
+
+        // 현재 셀
         const cellIdx = getCellAt(this.x, this.y);
-        if (cellIdx >= 0 && captureCell(cellIdx, this.colorIndex)) {
-            playCaptureSound(this.colorIndex);
+        if (cellIdx >= 0 && gridCells[cellIdx].inside) {
+            // 내 영역으로 돌아왔는지 체크
+            if (grid[cellIdx] === this.colorIndex && this.visitedCells.size > 5) {
+                this.tryCompleteShape();
+            } else if (grid[cellIdx] !== this.colorIndex) {
+                this.visitedCells.add(cellIdx);
+            }
         }
 
         // 공끼리 충돌
         balls.forEach(other => {
-            if (other === this) return;
+            if (other === this || other.dead) return;
             const dx = other.x - this.x;
             const dy = other.y - this.y;
             const dist = Math.sqrt(dx * dx + dy * dy);
             if (dist < this.radius + other.radius && dist > 0) {
-                // 밀어내기
                 const nx = dx / dist;
                 const ny = dy / dist;
                 const overlap = (this.radius + other.radius - dist) / 2;
@@ -404,7 +405,6 @@ class Ball {
                 other.x += nx * overlap;
                 other.y += ny * overlap;
 
-                // 속도 교환
                 const dvx = this.vx - other.vx;
                 const dvy = this.vy - other.vy;
                 const dot = dvx * nx + dvy * ny;
@@ -413,11 +413,54 @@ class Ball {
                 other.vx += dot * nx;
                 other.vy += dot * ny;
 
-                // 속도 정규화
                 this.normalizeSpeed();
                 other.normalizeSpeed();
             }
         });
+    }
+
+    tryCompleteShape() {
+        if (this.trail.length < 10) return;
+
+        // 경로로 다각형 만들기
+        const polygon = this.trail.slice(-Math.min(this.trail.length, 200));
+        if (polygon.length < 10) return;
+
+        // 폐곡선인지 확인 (시작점과 끝점 가까움)
+        const start = polygon[0];
+        const end = polygon[polygon.length - 1];
+        const dist = Math.sqrt((end.x - start.x) ** 2 + (end.y - start.y) ** 2);
+
+        // 도형 내부 셀 점령
+        let capturedCount = 0;
+        gridCells.forEach((cell, idx) => {
+            if (!cell.inside) return;
+            if (grid[idx] === this.colorIndex) return;
+
+            // 셀 중심이 경로 다각형 안에 있는지
+            if (pointInPolygon(cell.cx, cell.cy, polygon)) {
+                grid[idx] = this.colorIndex;
+                cell.owner = this.colorIndex;
+                capturedCount++;
+            }
+        });
+
+        if (capturedCount > 0) {
+            playEnclosureSound();
+
+            // 도형 안에 있는 다른 공 제거
+            balls.forEach(other => {
+                if (other === this || other.dead) return;
+                if (pointInPolygon(other.x, other.y, polygon)) {
+                    other.dead = true;
+                    spawnDeathParticles(other.x, other.y, other.colorIndex);
+                }
+            });
+        }
+
+        // 경로 리셋
+        this.trail = [{ x: this.x, y: this.y }];
+        this.visitedCells.clear();
     }
 
     normalizeSpeed() {
@@ -429,18 +472,20 @@ class Ball {
     }
 
     draw() {
-        // 경로 그리기
+        if (this.dead) return;
+
+        // 경로 그리기 (전체)
         if (this.trail.length > 1) {
             ctx.strokeStyle = COLORS[this.colorIndex];
-            ctx.lineWidth = 2;
-            ctx.globalAlpha = 0.6;
+            ctx.lineWidth = 3;
+            ctx.lineCap = 'round';
+            ctx.lineJoin = 'round';
             ctx.beginPath();
             ctx.moveTo(this.trail[0].x, this.trail[0].y);
             for (let i = 1; i < this.trail.length; i++) {
                 ctx.lineTo(this.trail[i].x, this.trail[i].y);
             }
             ctx.stroke();
-            ctx.globalAlpha = 1;
         }
 
         // 공
@@ -449,11 +494,48 @@ class Ball {
         ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
         ctx.fill();
 
-        // 테두리
         ctx.strokeStyle = '#fff';
         ctx.lineWidth = 2;
         ctx.stroke();
     }
+}
+
+// 사망 파티클
+let deathParticles = [];
+
+function spawnDeathParticles(x, y, colorIndex) {
+    for (let i = 0; i < 12; i++) {
+        const angle = (i / 12) * Math.PI * 2;
+        deathParticles.push({
+            x, y,
+            vx: Math.cos(angle) * 4,
+            vy: Math.sin(angle) * 4,
+            life: 40,
+            color: COLORS[colorIndex]
+        });
+    }
+}
+
+function updateDeathParticles() {
+    deathParticles.forEach(p => {
+        p.x += p.vx;
+        p.y += p.vy;
+        p.vx *= 0.95;
+        p.vy *= 0.95;
+        p.life--;
+    });
+    deathParticles = deathParticles.filter(p => p.life > 0);
+}
+
+function drawDeathParticles() {
+    deathParticles.forEach(p => {
+        ctx.fillStyle = p.color;
+        ctx.globalAlpha = p.life / 40;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 4, 0, Math.PI * 2);
+        ctx.fill();
+    });
+    ctx.globalAlpha = 1;
 }
 
 // ========== GAME LOGIC ==========
@@ -546,14 +628,28 @@ function draw() {
 
     // 공들
     balls.forEach(b => b.draw());
+
+    // 사망 파티클
+    drawDeathParticles();
 }
 
 function gameLoop() {
     if (!running) return;
 
     balls.forEach(b => b.update());
+    updateDeathParticles();
     updateScoreboard();
 
+    // 살아있는 공이 1개면 승리
+    const aliveBalls = balls.filter(b => !b.dead);
+    if (aliveBalls.length === 1) {
+        winner = aliveBalls[0].colorIndex;
+        running = false;
+        showWinner(winner);
+        return;
+    }
+
+    // 80개 달성 체크
     const w = checkWinner();
     if (w !== null) {
         winner = w;
