@@ -1,0 +1,537 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Escape Circle</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            background: #0a0a1a;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            overflow: hidden;
+        }
+        #game-container {
+            position: relative;
+            width: 360px;
+            height: 640px;
+            overflow: hidden;
+        }
+        canvas { display: block; }
+        #start-screen {
+            position: absolute;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+            background: rgba(10,10,26,0.95);
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            z-index: 10;
+        }
+        #title {
+            font-family: 'Arial', sans-serif;
+            font-size: 28px;
+            font-weight: bold;
+            color: #fff;
+            margin-bottom: 20px;
+            letter-spacing: 2px;
+        }
+        #subtitle {
+            font-family: 'Arial', sans-serif;
+            font-size: 14px;
+            color: #888;
+            margin-bottom: 40px;
+        }
+        #start-text {
+            font-family: 'Arial', sans-serif;
+            font-size: 18px;
+            color: #fff;
+            letter-spacing: 3px;
+            animation: pulse 1.5s ease-in-out infinite;
+        }
+        @keyframes pulse {
+            0%, 100% { opacity: 0.5; }
+            50% { opacity: 1; }
+        }
+        #score {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            font-family: 'Arial', sans-serif;
+            font-size: 24px;
+            color: #fff;
+            z-index: 5;
+        }
+        #timer {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            font-family: 'Arial', sans-serif;
+            font-size: 20px;
+            color: #fff;
+            z-index: 5;
+        }
+        #game-over {
+            position: absolute;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+            background: rgba(10,10,26,0.95);
+            display: none;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            z-index: 20;
+        }
+        #game-over-text {
+            font-family: 'Arial', sans-serif;
+            font-size: 32px;
+            color: #fff;
+            margin-bottom: 20px;
+        }
+        #final-score {
+            font-family: 'Arial', sans-serif;
+            font-size: 20px;
+            color: #888;
+            margin-bottom: 30px;
+        }
+        #replay-text {
+            font-family: 'Arial', sans-serif;
+            font-size: 16px;
+            color: #666;
+            animation: pulse 1.5s ease-in-out infinite;
+        }
+    </style>
+</head>
+<body>
+    <div id="game-container">
+        <canvas id="canvas"></canvas>
+        <div id="score">0</div>
+        <div id="timer">4.0</div>
+        <div id="start-screen">
+            <div id="title">ESCAPE CIRCLE</div>
+            <div id="subtitle">Escape before time runs out!</div>
+            <div id="start-text">TAP TO START</div>
+        </div>
+        <div id="game-over">
+            <div id="game-over-text">GAME OVER</div>
+            <div id="final-score">Score: 0</div>
+            <div id="replay-text">TAP TO REPLAY</div>
+        </div>
+    </div>
+
+<script>
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+const W = 360, H = 640;
+canvas.width = W;
+canvas.height = H;
+
+const CENTER = { x: W / 2, y: H / 2 };
+const CIRCLE_RADIUS = 120;
+const BALL_RADIUS = 12;
+const GAP_SIZE = 0.4; // 라디안
+const TIME_LIMIT = 4;
+
+// 멜로디: 라미라미 시미시미 도미도미 레미레미
+const MELODY = [
+    [440, 659.25], [440, 659.25], // 라미 라미
+    [493.88, 659.25], [493.88, 659.25], // 시미 시미
+    [523.25, 659.25], [523.25, 659.25], // 도미 도미
+    [587.33, 659.25], [587.33, 659.25]  // 레미 레미
+];
+let melodyIndex = 0;
+let noteInPair = 0;
+
+let audioCtx = null;
+let running = false;
+let gameOver = false;
+let score = 0;
+let timeLeft = TIME_LIMIT;
+let lastTime = 0;
+
+let ball = null;
+let circleAngle = 0;
+let circleSpeed = 0.02;
+let obstacles = [];
+
+function initAudio() {
+    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+}
+
+function playNote(freq1, freq2) {
+    if (!audioCtx) return;
+
+    // 첫번째 음
+    const osc1 = audioCtx.createOscillator();
+    const gain1 = audioCtx.createGain();
+    osc1.type = 'sine';
+    osc1.frequency.value = freq1;
+    gain1.gain.setValueAtTime(0.3, audioCtx.currentTime);
+    gain1.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.5);
+    osc1.connect(gain1);
+    gain1.connect(audioCtx.destination);
+    osc1.start();
+    osc1.stop(audioCtx.currentTime + 0.5);
+
+    // 두번째 음 (화음)
+    const osc2 = audioCtx.createOscillator();
+    const gain2 = audioCtx.createGain();
+    osc2.type = 'sine';
+    osc2.frequency.value = freq2;
+    gain2.gain.setValueAtTime(0.2, audioCtx.currentTime);
+    gain2.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.5);
+    osc2.connect(gain2);
+    gain2.connect(audioCtx.destination);
+    osc2.start();
+    osc2.stop(audioCtx.currentTime + 0.5);
+}
+
+function playBounceSound() {
+    const [freq1, freq2] = MELODY[melodyIndex];
+    playNote(freq1, freq2);
+
+    noteInPair++;
+    if (noteInPair >= 2) {
+        noteInPair = 0;
+        melodyIndex = (melodyIndex + 1) % MELODY.length;
+    }
+}
+
+function playFreezeSound() {
+    if (!audioCtx) return;
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.type = 'sawtooth';
+    osc.frequency.setValueAtTime(200, audioCtx.currentTime);
+    osc.frequency.exponentialRampToValueAtTime(50, audioCtx.currentTime + 0.3);
+    gain.gain.setValueAtTime(0.3, audioCtx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.3);
+    osc.connect(gain);
+    gain.connect(audioCtx.destination);
+    osc.start();
+    osc.stop(audioCtx.currentTime + 0.3);
+}
+
+function playEscapeSound() {
+    if (!audioCtx) return;
+    const freqs = [523.25, 659.25, 783.99, 1046.5];
+    freqs.forEach((freq, i) => {
+        setTimeout(() => {
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            osc.type = 'sine';
+            osc.frequency.value = freq;
+            gain.gain.setValueAtTime(0.25, audioCtx.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.2);
+            osc.connect(gain);
+            gain.connect(audioCtx.destination);
+            osc.start();
+            osc.stop(audioCtx.currentTime + 0.2);
+        }, i * 80);
+    });
+}
+
+class Ball {
+    constructor() {
+        this.x = CENTER.x;
+        this.y = CENTER.y;
+        this.vx = (Math.random() - 0.5) * 4;
+        this.vy = (Math.random() - 0.5) * 4;
+        this.radius = BALL_RADIUS;
+        this.frozen = false;
+    }
+
+    update() {
+        if (this.frozen) return;
+
+        this.x += this.vx;
+        this.y += this.vy;
+
+        // 원 벽 충돌
+        const dx = this.x - CENTER.x;
+        const dy = this.y - CENTER.y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+
+        if (dist + this.radius > CIRCLE_RADIUS) {
+            const angle = Math.atan2(dy, dx);
+
+            // 갭 체크
+            let gapStart = circleAngle;
+            let gapEnd = circleAngle + GAP_SIZE;
+
+            let inGap = false;
+            if (gapEnd > Math.PI * 2) {
+                inGap = angle >= gapStart || angle <= gapEnd - Math.PI * 2;
+            } else {
+                inGap = angle >= gapStart && angle <= gapEnd;
+            }
+            // 음수 각도 처리
+            let angleNorm = angle < 0 ? angle + Math.PI * 2 : angle;
+            if (gapEnd > Math.PI * 2) {
+                inGap = angleNorm >= gapStart || angleNorm <= gapEnd - Math.PI * 2;
+            } else {
+                inGap = angleNorm >= gapStart && angleNorm <= gapEnd;
+            }
+
+            if (inGap && dist > CIRCLE_RADIUS) {
+                // 탈출 성공!
+                return 'escaped';
+            }
+
+            // 벽에 튕김
+            const nx = dx / dist;
+            const ny = dy / dist;
+            this.x = CENTER.x + nx * (CIRCLE_RADIUS - this.radius - 1);
+            this.y = CENTER.y + ny * (CIRCLE_RADIUS - this.radius - 1);
+
+            const dot = this.vx * nx + this.vy * ny;
+            this.vx = this.vx - 2 * dot * nx;
+            this.vy = this.vy - 2 * dot * ny;
+
+            // 약간의 속도 유지
+            const speed = Math.sqrt(this.vx * this.vx + this.vy * this.vy);
+            if (speed < 2) {
+                this.vx *= 1.5;
+                this.vy *= 1.5;
+            }
+
+            playBounceSound();
+        }
+
+        // 장애물 충돌
+        for (const obs of obstacles) {
+            const odx = this.x - obs.x;
+            const ody = this.y - obs.y;
+            const odist = Math.sqrt(odx * odx + ody * ody);
+            if (odist < this.radius + obs.radius) {
+                const nx = odx / odist;
+                const ny = ody / odist;
+                this.x = obs.x + nx * (this.radius + obs.radius + 1);
+                this.y = obs.y + ny * (this.radius + obs.radius + 1);
+
+                const dot = this.vx * nx + this.vy * ny;
+                this.vx = this.vx - 2 * dot * nx;
+                this.vy = this.vy - 2 * dot * ny;
+
+                playBounceSound();
+            }
+        }
+
+        return 'playing';
+    }
+
+    draw() {
+        ctx.save();
+
+        // 그림자
+        ctx.fillStyle = 'rgba(0,0,0,0.3)';
+        ctx.beginPath();
+        ctx.arc(this.x + 2, this.y + 2, this.radius, 0, Math.PI * 2);
+        ctx.fill();
+
+        // 공
+        const gradient = ctx.createRadialGradient(
+            this.x - 3, this.y - 3, 0,
+            this.x, this.y, this.radius
+        );
+        if (this.frozen) {
+            gradient.addColorStop(0, '#888');
+            gradient.addColorStop(1, '#444');
+        } else {
+            gradient.addColorStop(0, '#fff');
+            gradient.addColorStop(0.5, '#4ecdc4');
+            gradient.addColorStop(1, '#2a9d8f');
+        }
+        ctx.fillStyle = gradient;
+        ctx.beginPath();
+        ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.restore();
+    }
+}
+
+function spawnBall() {
+    ball = new Ball();
+    timeLeft = TIME_LIMIT;
+}
+
+function freezeBall() {
+    if (!ball || ball.frozen) return;
+
+    ball.frozen = true;
+    obstacles.push({
+        x: ball.x,
+        y: ball.y,
+        radius: ball.radius
+    });
+    playFreezeSound();
+
+    // 장애물이 너무 많으면 게임오버
+    if (obstacles.length >= 10) {
+        endGame();
+        return;
+    }
+
+    // 새 공 생성
+    setTimeout(() => {
+        if (running && !gameOver) {
+            spawnBall();
+        }
+    }, 500);
+}
+
+function escaped() {
+    score++;
+    document.getElementById('score').textContent = score;
+    playEscapeSound();
+
+    // 난이도 증가
+    circleSpeed += 0.003;
+
+    // 새 공 생성
+    setTimeout(() => {
+        if (running && !gameOver) {
+            spawnBall();
+        }
+    }, 500);
+}
+
+function endGame() {
+    running = false;
+    gameOver = true;
+    document.getElementById('final-score').textContent = `Score: ${score}`;
+    document.getElementById('game-over').style.display = 'flex';
+}
+
+function draw() {
+    // 배경
+    ctx.fillStyle = '#0a0a1a';
+    ctx.fillRect(0, 0, W, H);
+
+    // 회전하는 원 (갭 있음)
+    ctx.strokeStyle = '#3a3a5a';
+    ctx.lineWidth = 8;
+    ctx.beginPath();
+    ctx.arc(CENTER.x, CENTER.y, CIRCLE_RADIUS, circleAngle + GAP_SIZE, circleAngle + Math.PI * 2);
+    ctx.stroke();
+
+    // 갭 표시 (빛나는 효과)
+    ctx.strokeStyle = '#4ecdc4';
+    ctx.lineWidth = 4;
+    ctx.shadowColor = '#4ecdc4';
+    ctx.shadowBlur = 15;
+    const gapMid = circleAngle + GAP_SIZE / 2;
+    ctx.beginPath();
+    ctx.arc(CENTER.x, CENTER.y, CIRCLE_RADIUS, circleAngle, circleAngle + GAP_SIZE);
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+
+    // 장애물 (얼어붙은 공들)
+    obstacles.forEach(obs => {
+        ctx.fillStyle = '#444';
+        ctx.beginPath();
+        ctx.arc(obs.x, obs.y, obs.radius, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = '#666';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+    });
+
+    // 현재 공
+    if (ball) {
+        ball.draw();
+    }
+
+    // 타이머 시각화 (원 주변)
+    if (running && !gameOver && ball && !ball.frozen) {
+        const timerRatio = timeLeft / TIME_LIMIT;
+        ctx.strokeStyle = timerRatio > 0.3 ? '#4ecdc4' : '#ff6b6b';
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.arc(CENTER.x, CENTER.y, CIRCLE_RADIUS + 15, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * timerRatio);
+        ctx.stroke();
+    }
+}
+
+function gameLoop(timestamp) {
+    if (!running) return;
+
+    const dt = (timestamp - lastTime) / 1000;
+    lastTime = timestamp;
+
+    // 원 회전
+    circleAngle += circleSpeed;
+    if (circleAngle > Math.PI * 2) circleAngle -= Math.PI * 2;
+
+    // 타이머
+    if (ball && !ball.frozen) {
+        timeLeft -= dt;
+        document.getElementById('timer').textContent = Math.max(0, timeLeft).toFixed(1);
+
+        if (timeLeft <= 0) {
+            freezeBall();
+        }
+    }
+
+    // 공 업데이트
+    if (ball && !ball.frozen) {
+        const result = ball.update();
+        if (result === 'escaped') {
+            ball = null;
+            escaped();
+        }
+    }
+
+    draw();
+    requestAnimationFrame(gameLoop);
+}
+
+function start() {
+    document.getElementById('start-screen').style.display = 'none';
+    document.getElementById('game-over').style.display = 'none';
+    initAudio();
+
+    score = 0;
+    obstacles = [];
+    circleAngle = 0;
+    circleSpeed = 0.02;
+    melodyIndex = 0;
+    noteInPair = 0;
+    gameOver = false;
+    running = true;
+
+    document.getElementById('score').textContent = '0';
+
+    spawnBall();
+    lastTime = performance.now();
+    requestAnimationFrame(gameLoop);
+}
+
+function init() {
+    draw();
+
+    const ss = document.getElementById('start-screen');
+    ss.addEventListener('click', start);
+    ss.addEventListener('touchstart', (e) => {
+        e.preventDefault();
+        start();
+    });
+
+    const go = document.getElementById('game-over');
+    go.addEventListener('click', start);
+    go.addEventListener('touchstart', (e) => {
+        e.preventDefault();
+        start();
+    });
+}
+
+window.onload = init;
+</script>
+</body>
+</html>
