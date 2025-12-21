@@ -20,7 +20,12 @@
             height: 640px;
             overflow: hidden;
         }
-        canvas { display: block; }
+        canvas {
+            display: block;
+            position: absolute;
+            top: 0;
+            left: 0;
+        }
         #start-screen {
             position: absolute;
             top: 0; left: 0;
@@ -79,6 +84,13 @@
             from { transform: translateY(0); }
             to { transform: translateY(-20px); }
         }
+        #replay-text {
+            font-family: 'Arial', sans-serif;
+            font-size: 16px;
+            color: #888;
+            margin-top: 30px;
+            animation: pulse 1.5s ease-in-out infinite;
+        }
         #positions {
             position: absolute;
             top: 15px;
@@ -87,6 +99,24 @@
             font-size: 14px;
             color: #fff;
             z-index: 5;
+        }
+        #progress-bar {
+            position: absolute;
+            right: 15px;
+            top: 15px;
+            width: 8px;
+            height: 200px;
+            background: rgba(255,255,255,0.2);
+            border-radius: 4px;
+            z-index: 5;
+        }
+        .progress-marble {
+            position: absolute;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            right: -2px;
+            transition: top 0.1s;
         }
         .pos-item {
             display: flex;
@@ -105,6 +135,7 @@
     <div id="game-container">
         <canvas id="canvas"></canvas>
         <div id="positions"></div>
+        <div id="progress-bar"></div>
         <div id="start-screen">
             <div id="title">MARBLE RACE</div>
             <div id="start-text">TAP TO START</div>
@@ -112,6 +143,7 @@
         <div id="winner-screen">
             <div id="winner-text">WINNER</div>
             <div id="winner-ball"></div>
+            <div id="replay-text">TAP TO REPLAY</div>
         </div>
     </div>
 
@@ -119,21 +151,24 @@
 const canvas = document.getElementById('canvas');
 const ctx = canvas.getContext('2d');
 const W = 360, H = 640;
+const TRACK_HEIGHT = 1800; // 훨씬 긴 트랙
 canvas.width = W;
 canvas.height = H;
 
 const COLORS = ['#ff6b6b', '#4ecdc4', '#ffe66d', '#a29bfe'];
 const NOTES = [261.6, 329.6, 392.0, 523.3]; // C4, E4, G4, C5
-const GRAVITY = 0.15;
+const GRAVITY = 0.18;
 const FRICTION = 0.99;
-const BOUNCE = 0.7;
+const BOUNCE = 0.85;
 
 let audioCtx = null;
 let marbles = [];
 let platforms = [];
+let bumpers = [];
 let running = false;
 let winner = null;
 let finishY = 0;
+let cameraY = 0;
 
 // ========== AUDIO ==========
 
@@ -178,6 +213,33 @@ function playRoll(marbleIndex) {
     osc.stop(audioCtx.currentTime + 0.05);
 }
 
+function playBumperHit(marbleIndex) {
+    if (!audioCtx) return;
+
+    const osc = audioCtx.createOscillator();
+    const osc2 = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+
+    osc.type = 'square';
+    osc.frequency.setValueAtTime(NOTES[marbleIndex] * 2, audioCtx.currentTime);
+    osc.frequency.exponentialRampToValueAtTime(NOTES[marbleIndex] * 0.8, audioCtx.currentTime + 0.1);
+
+    osc2.type = 'sine';
+    osc2.frequency.setValueAtTime(NOTES[marbleIndex] * 3, audioCtx.currentTime);
+    osc2.frequency.exponentialRampToValueAtTime(NOTES[marbleIndex], audioCtx.currentTime + 0.1);
+
+    gain.gain.setValueAtTime(0.25, audioCtx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.15);
+
+    osc.connect(gain);
+    osc2.connect(gain);
+    gain.connect(audioCtx.destination);
+    osc.start();
+    osc2.start();
+    osc.stop(audioCtx.currentTime + 0.15);
+    osc2.stop(audioCtx.currentTime + 0.15);
+}
+
 function playWinSound() {
     if (!audioCtx) return;
 
@@ -205,33 +267,69 @@ function playWinSound() {
 
 function createTrack() {
     platforms = [];
+    bumpers = [];
 
     const startY = 80;
-    finishY = H - 60;
+    finishY = TRACK_HEIGHT - 60;
 
-    // 지그재그 플랫폼 생성
     let y = startY + 60;
-    let leftSide = true;
+    let sectionType = 0;
 
-    while (y < finishY - 80) {
-        const platWidth = 120 + Math.random() * 60;
-        const x = leftSide ? 20 : W - platWidth - 20;
+    while (y < finishY - 100) {
+        sectionType = Math.floor(Math.random() * 4);
 
-        platforms.push({
-            x: x,
-            y: y,
-            w: platWidth,
-            h: 8,
-            angle: leftSide ? 0.15 : -0.15 // 살짝 기울임
-        });
+        if (sectionType === 0) {
+            // 지그재그 섹션
+            for (let i = 0; i < 3 && y < finishY - 100; i++) {
+                const leftSide = i % 2 === 0;
+                const platWidth = 120 + Math.random() * 40;
+                const x = leftSide ? 20 : W - platWidth - 20;
+                platforms.push({
+                    x: x, y: y, w: platWidth, h: 8,
+                    angle: leftSide ? 0.2 : -0.2
+                });
+                y += 60 + Math.random() * 20;
+            }
+        } else if (sectionType === 1) {
+            // 범퍼 섹션
+            const numBumpers = 3 + Math.floor(Math.random() * 3);
+            for (let i = 0; i < numBumpers; i++) {
+                bumpers.push({
+                    x: 40 + Math.random() * (W - 80),
+                    y: y + i * 40,
+                    radius: 15 + Math.random() * 10,
+                    color: `hsl(${Math.random() * 360}, 70%, 60%)`
+                });
+            }
+            y += numBumpers * 40 + 30;
+        } else if (sectionType === 2) {
+            // 좁은 통로
+            const gapWidth = 60 + Math.random() * 30;
+            const gapX = 30 + Math.random() * (W - gapWidth - 60);
+            platforms.push({ x: 15, y: y, w: gapX - 15, h: 10, angle: 0.15 });
+            platforms.push({ x: gapX + gapWidth, y: y, w: W - gapX - gapWidth - 15, h: 10, angle: -0.15 });
+            y += 80;
+        } else if (sectionType === 3) {
+            // 깔때기
+            platforms.push({ x: 15, y: y, w: 80, h: 8, angle: 0.35 });
+            platforms.push({ x: W - 95, y: y, w: 80, h: 8, angle: -0.35 });
+            // 중간 작은 플랫폼
+            platforms.push({
+                x: W / 2 - 40,
+                y: y + 60,
+                w: 80,
+                h: 8,
+                angle: (Math.random() - 0.5) * 0.3
+            });
+            y += 120;
+        }
 
-        y += 70 + Math.random() * 30;
-        leftSide = !leftSide;
+        y += 20 + Math.random() * 30;
     }
 
-    // 벽 추가
-    platforms.push({ x: 0, y: 0, w: 10, h: H, angle: 0, isWall: true }); // 왼쪽 벽
-    platforms.push({ x: W - 10, y: 0, w: 10, h: H, angle: 0, isWall: true }); // 오른쪽 벽
+    // 벽
+    platforms.push({ x: 0, y: 0, w: 10, h: TRACK_HEIGHT, angle: 0, isWall: true });
+    platforms.push({ x: W - 10, y: 0, w: 10, h: TRACK_HEIGHT, angle: 0, isWall: true });
 }
 
 // ========== MARBLE ==========
@@ -272,12 +370,12 @@ class Marble {
                 // 벽 충돌
                 if (plat.x === 0 && this.x - this.radius < plat.w) {
                     this.x = plat.w + this.radius;
-                    this.vx = Math.abs(this.vx) * BOUNCE;
+                    this.vx = Math.abs(this.vx) * BOUNCE + 1;
                     this.bounce(0.5);
                 }
                 if (plat.x > 0 && this.x + this.radius > plat.x) {
                     this.x = plat.x - this.radius;
-                    this.vx = -Math.abs(this.vx) * BOUNCE;
+                    this.vx = -Math.abs(this.vx) * BOUNCE - 1;
                     this.bounce(0.5);
                 }
             } else {
@@ -291,10 +389,74 @@ class Marble {
                     if (this.vy > 0 && this.y - this.radius < plat.y) {
                         this.y = plat.y - this.radius;
                         this.vy = -this.vy * BOUNCE;
-                        this.vx += plat.angle * 3; // 기울기에 따라 굴러감
+                        this.vx += plat.angle * 5; // 기울기에 따라 굴러감 (더 강하게)
                         this.bounce(Math.abs(this.vy) / 5);
                     }
+                    // 아래에서 부딪힘
+                    else if (this.vy < 0 && this.y + this.radius > plat.y + plat.h) {
+                        this.y = plat.y + plat.h + this.radius;
+                        this.vy = Math.abs(this.vy) * BOUNCE;
+                        this.bounce(0.3);
+                    }
+                    // 옆에서 부딪힘
+                    else {
+                        if (this.x < plat.x + plat.w / 2) {
+                            this.x = plat.x - this.radius;
+                            this.vx = -Math.abs(this.vx) * BOUNCE - 1;
+                        } else {
+                            this.x = plat.x + plat.w + this.radius;
+                            this.vx = Math.abs(this.vx) * BOUNCE + 1;
+                        }
+                        this.bounce(0.3);
+                    }
                 }
+            }
+        });
+
+        // 범퍼 충돌
+        bumpers.forEach(b => {
+            const dx = this.x - b.x;
+            const dy = this.y - b.y;
+            const dist = Math.sqrt(dx * dx + dy * dy);
+            if (dist < this.radius + b.radius) {
+                const nx = dx / dist;
+                const ny = dy / dist;
+                this.x = b.x + nx * (this.radius + b.radius + 1);
+                this.y = b.y + ny * (this.radius + b.radius + 1);
+                const speed = Math.sqrt(this.vx * this.vx + this.vy * this.vy);
+                this.vx = nx * speed * 1.2;
+                this.vy = ny * speed * 1.2;
+                playBumperHit(this.colorIndex);
+                b.hit = 5; // 히트 애니메이션
+            }
+        });
+
+        // 구슬끼리 충돌
+        marbles.forEach(other => {
+            if (other === this || other.finished) return;
+            const dx = this.x - other.x;
+            const dy = this.y - other.y;
+            const dist = Math.sqrt(dx * dx + dy * dy);
+            const minDist = this.radius + other.radius;
+            if (dist < minDist && dist > 0) {
+                const nx = dx / dist;
+                const ny = dy / dist;
+                const overlap = (minDist - dist) / 2;
+                this.x += nx * overlap;
+                this.y += ny * overlap;
+                other.x -= nx * overlap;
+                other.y -= ny * overlap;
+
+                // 탄성 충돌
+                const dvx = this.vx - other.vx;
+                const dvy = this.vy - other.vy;
+                const dot = dvx * nx + dvy * ny;
+                this.vx -= dot * nx * 0.8;
+                this.vy -= dot * ny * 0.8;
+                other.vx += dot * nx * 0.8;
+                other.vy += dot * ny * 0.8;
+
+                this.bounce(0.3);
             }
         });
 
@@ -374,6 +536,31 @@ function getPositions() {
     return sorted;
 }
 
+function initProgressBar() {
+    const bar = document.getElementById('progress-bar');
+    bar.innerHTML = '';
+    for (let i = 0; i < 4; i++) {
+        const dot = document.createElement('div');
+        dot.className = 'progress-marble';
+        dot.id = `prog-${i}`;
+        dot.style.background = COLORS[i];
+        dot.style.top = '0px';
+        bar.appendChild(dot);
+    }
+}
+
+function updateProgressBar() {
+    const startY = 80;
+    const endY = finishY;
+    marbles.forEach((m, i) => {
+        const progress = Math.max(0, Math.min(1, (m.y - startY) / (endY - startY)));
+        const dot = document.getElementById(`prog-${i}`);
+        if (dot) {
+            dot.style.top = `${progress * 188}px`;
+        }
+    });
+}
+
 function updatePositions() {
     const positions = getPositions();
     const container = document.getElementById('positions');
@@ -388,12 +575,27 @@ function updatePositions() {
         `;
         container.appendChild(div);
     });
+
+    updateProgressBar();
+}
+
+function updateCamera() {
+    // 선두 구슬 따라가기
+    const leader = getPositions()[0];
+    if (leader) {
+        const targetY = leader.y - 200;
+        cameraY += (targetY - cameraY) * 0.1;
+        cameraY = Math.max(0, Math.min(TRACK_HEIGHT - H, cameraY));
+    }
 }
 
 function draw() {
     // 배경
     ctx.fillStyle = '#111';
     ctx.fillRect(0, 0, W, H);
+
+    ctx.save();
+    ctx.translate(0, -cameraY);
 
     // 스타트 라인
     ctx.strokeStyle = '#fff';
@@ -433,13 +635,43 @@ function draw() {
         ctx.restore();
     });
 
+    // 범퍼
+    bumpers.forEach(b => {
+        const scale = b.hit ? 1.2 : 1;
+        if (b.hit) b.hit--;
+
+        ctx.save();
+        ctx.translate(b.x, b.y);
+        ctx.scale(scale, scale);
+
+        // 그림자
+        ctx.fillStyle = 'rgba(0,0,0,0.3)';
+        ctx.beginPath();
+        ctx.arc(2, 2, b.radius, 0, Math.PI * 2);
+        ctx.fill();
+
+        // 범퍼 본체
+        const grad = ctx.createRadialGradient(-b.radius * 0.3, -b.radius * 0.3, 0, 0, 0, b.radius);
+        grad.addColorStop(0, '#fff');
+        grad.addColorStop(0.5, b.color);
+        grad.addColorStop(1, b.color);
+        ctx.fillStyle = grad;
+        ctx.beginPath();
+        ctx.arc(0, 0, b.radius, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.restore();
+    });
+
     // 벽
     ctx.fillStyle = '#333';
-    ctx.fillRect(0, 0, 10, H);
-    ctx.fillRect(W - 10, 0, 10, H);
+    ctx.fillRect(0, 0, 10, TRACK_HEIGHT);
+    ctx.fillRect(W - 10, 0, 10, TRACK_HEIGHT);
 
     // 구슬
     marbles.forEach(m => m.draw());
+
+    ctx.restore();
 }
 
 function gameLoop() {
@@ -447,6 +679,7 @@ function gameLoop() {
 
     marbles.forEach(m => m.update());
     updatePositions();
+    updateCamera();
 
     // 승자 체크
     const finished = marbles.filter(m => m.finished);
@@ -476,9 +709,11 @@ function start() {
 
     createTrack();
     createMarbles();
+    initProgressBar();
 
     running = true;
     winner = null;
+    cameraY = 0;
 
     // 3, 2, 1 카운트다운 후 시작
     let count = 3;
@@ -496,6 +731,12 @@ function start() {
     draw();
 }
 
+function replay() {
+    document.getElementById('winner-screen').style.display = 'none';
+    winner = null;
+    start();
+}
+
 function init() {
     createTrack();
     draw();
@@ -505,6 +746,13 @@ function init() {
     ss.addEventListener('touchstart', (e) => {
         e.preventDefault();
         if (!running && !winner) start();
+    });
+
+    const ws = document.getElementById('winner-screen');
+    ws.addEventListener('click', replay);
+    ws.addEventListener('touchstart', (e) => {
+        e.preventDefault();
+        replay();
     });
 }
 
