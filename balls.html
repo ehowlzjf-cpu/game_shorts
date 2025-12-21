@@ -149,10 +149,22 @@ let audioCtx = null;
 let balls = [];
 let running = false;
 let winner = null;
-let arenaVertices = [];
 let arenaName = '';
-let grid = []; // 100 cells, each has owner (-1 = none, 0-3 = color)
-let gridCells = []; // cell boundaries
+let grid = [];
+let gridCells = [];
+
+// 다각형 내부 체크 (실선 도형용)
+function pointInPolygon(px, py, vertices) {
+    let inside = false;
+    for (let i = 0, j = vertices.length - 1; i < vertices.length; j = i++) {
+        const xi = vertices[i].x, yi = vertices[i].y;
+        const xj = vertices[j].x, yj = vertices[j].y;
+        if (((yi > py) !== (yj > py)) && (px < (xj - xi) * (py - yi) / (yj - yi) + xi)) {
+            inside = !inside;
+        }
+    }
+    return inside;
+}
 
 // ========== AUDIO ==========
 
@@ -214,59 +226,19 @@ function playWinSound() {
     });
 }
 
-// ========== ARENA SHAPES ==========
+// ========== ARENA (원형) ==========
 
-const SHAPES = [
-    { name: 'STAR', sides: 5, star: true },
-    { name: 'PENTAGON', sides: 5, star: false },
-    { name: 'HEXAGON', sides: 6, star: false },
-    { name: 'SQUARE', sides: 4, star: false },
-    { name: 'OCTAGON', sides: 8, star: false },
-    { name: 'TRIANGLE', sides: 3, star: false },
-    { name: 'HEPTAGON', sides: 7, star: false },
-];
+const ARENA_RADIUS = 140;
 
 function generateArena() {
-    const shape = SHAPES[Math.floor(Math.random() * SHAPES.length)];
-    arenaName = shape.name;
+    arenaName = 'CIRCLE';
     document.getElementById('shape-name').textContent = arenaName;
-
-    arenaVertices = [];
-    const outerR = 140;
-    const innerR = 60;
-
-    if (shape.star) {
-        // 별 모양
-        for (let i = 0; i < shape.sides * 2; i++) {
-            const angle = (i * Math.PI / shape.sides) - Math.PI / 2;
-            const r = (i % 2 === 0) ? outerR : innerR;
-            arenaVertices.push({
-                x: CENTER.x + Math.cos(angle) * r,
-                y: CENTER.y + Math.sin(angle) * r
-            });
-        }
-    } else {
-        // 일반 다각형
-        for (let i = 0; i < shape.sides; i++) {
-            const angle = (i * 2 * Math.PI / shape.sides) - Math.PI / 2;
-            arenaVertices.push({
-                x: CENTER.x + Math.cos(angle) * outerR,
-                y: CENTER.y + Math.sin(angle) * outerR
-            });
-        }
-    }
 }
 
-function pointInPolygon(px, py, vertices) {
-    let inside = false;
-    for (let i = 0, j = vertices.length - 1; i < vertices.length; j = i++) {
-        const xi = vertices[i].x, yi = vertices[i].y;
-        const xj = vertices[j].x, yj = vertices[j].y;
-        if (((yi > py) !== (yj > py)) && (px < (xj - xi) * (py - yi) / (yj - yi) + xi)) {
-            inside = !inside;
-        }
-    }
-    return inside;
+function pointInArena(px, py) {
+    const dx = px - CENTER.x;
+    const dy = py - CENTER.y;
+    return dx * dx + dy * dy <= ARENA_RADIUS * ARENA_RADIUS;
 }
 
 // ========== GRID SYSTEM ==========
@@ -277,21 +249,17 @@ function initGrid() {
     grid = [];
     gridCells = [];
 
-    // 경계 박스 계산
-    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-    arenaVertices.forEach(v => {
-        minX = Math.min(minX, v.x);
-        maxX = Math.max(maxX, v.x);
-        minY = Math.min(minY, v.y);
-        maxY = Math.max(maxY, v.y);
-    });
+    // 원형 경계 박스
+    const minX = CENTER.x - ARENA_RADIUS;
+    const maxX = CENTER.x + ARENA_RADIUS;
+    const minY = CENTER.y - ARENA_RADIUS;
+    const maxY = CENTER.y + ARENA_RADIUS;
 
-    // 그리드 사이즈 조절해서 100개 맞추기
-    let gridSize = 10;
+    // 그리드 사이즈 조절해서 ~100개 맞추기
+    let gridSize = 12;
     let insideCount = 0;
 
-    // 적절한 그리드 사이즈 찾기
-    for (let trySize = 8; trySize <= 20; trySize++) {
+    for (let trySize = 10; trySize <= 16; trySize++) {
         const cellW = (maxX - minX) / trySize;
         const cellH = (maxY - minY) / trySize;
         let count = 0;
@@ -300,7 +268,7 @@ function initGrid() {
             for (let col = 0; col < trySize; col++) {
                 const cx = minX + (col + 0.5) * cellW;
                 const cy = minY + (row + 0.5) * cellH;
-                if (pointInPolygon(cx, cy, arenaVertices)) count++;
+                if (pointInArena(cx, cy)) count++;
             }
         }
 
@@ -313,13 +281,12 @@ function initGrid() {
     const cellW = (maxX - minX) / gridSize;
     const cellH = (maxY - minY) / gridSize;
 
-    // 실제 그리드 생성 (안에 있는 셀만)
     for (let row = 0; row < gridSize; row++) {
         for (let col = 0; col < gridSize; col++) {
             const cx = minX + (col + 0.5) * cellW;
             const cy = minY + (row + 0.5) * cellH;
 
-            if (!pointInPolygon(cx, cy, arenaVertices)) continue;
+            if (!pointInArena(cx, cy)) continue;
 
             const cell = {
                 x: minX + col * cellW,
@@ -335,8 +302,6 @@ function initGrid() {
             grid.push(-1);
         }
     }
-
-    console.log('Total cells:', gridCells.length);
 }
 
 function getCellAt(x, y) {
@@ -386,58 +351,24 @@ class Ball {
         this.x += this.vx;
         this.y += this.vy;
 
-        // 벽 충돌 (입사각 = 반사각)
-        if (!pointInPolygon(this.x, this.y, arenaVertices)) {
-            this.x = prevX;
-            this.y = prevY;
+        // 원형 벽 충돌 (입사각 = 반사각)
+        const dx = this.x - CENTER.x;
+        const dy = this.y - CENTER.y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
 
-            // 가장 가까운 벽 찾기
-            let minDist = Infinity;
-            let wallNormal = { x: 0, y: 0 };
+        if (dist + this.radius > ARENA_RADIUS) {
+            // 법선: 중심에서 공 방향
+            const nx = dx / dist;
+            const ny = dy / dist;
 
-            for (let i = 0; i < arenaVertices.length; i++) {
-                const a = arenaVertices[i];
-                const b = arenaVertices[(i + 1) % arenaVertices.length];
-
-                // 선분 벡터
-                const edgeX = b.x - a.x;
-                const edgeY = b.y - a.y;
-                const edgeLen = Math.sqrt(edgeX * edgeX + edgeY * edgeY);
-
-                // 공에서 선분까지 투영
-                const t = Math.max(0, Math.min(1,
-                    ((this.x - a.x) * edgeX + (this.y - a.y) * edgeY) / (edgeLen * edgeLen)
-                ));
-
-                const closestX = a.x + t * edgeX;
-                const closestY = a.y + t * edgeY;
-                const dist = Math.sqrt((this.x - closestX) ** 2 + (this.y - closestY) ** 2);
-
-                if (dist < minDist) {
-                    minDist = dist;
-                    // 법선 벡터 (선분에 수직, 안쪽 방향)
-                    let nx = -edgeY / edgeLen;
-                    let ny = edgeX / edgeLen;
-
-                    // 법선이 중심을 향하도록
-                    const midX = (a.x + b.x) / 2;
-                    const midY = (a.y + b.y) / 2;
-                    const toCenterX = CENTER.x - midX;
-                    const toCenterY = CENTER.y - midY;
-
-                    if (nx * toCenterX + ny * toCenterY < 0) {
-                        nx = -nx;
-                        ny = -ny;
-                    }
-
-                    wallNormal = { x: nx, y: ny };
-                }
-            }
+            // 위치 보정
+            this.x = CENTER.x + nx * (ARENA_RADIUS - this.radius - 1);
+            this.y = CENTER.y + ny * (ARENA_RADIUS - this.radius - 1);
 
             // 반사: v' = v - 2(v·n)n
-            const dot = this.vx * wallNormal.x + this.vy * wallNormal.y;
-            this.vx = this.vx - 2 * dot * wallNormal.x;
-            this.vy = this.vy - 2 * dot * wallNormal.y;
+            const dot = this.vx * nx + this.vy * ny;
+            this.vx = this.vx - 2 * dot * nx;
+            this.vy = this.vy - 2 * dot * ny;
 
             this.normalizeSpeed();
         }
@@ -675,15 +606,17 @@ function drawDeathParticles() {
 function createBalls() {
     balls = [];
 
-    // 4개 공을 맵 안 랜덤 위치에 배치
+    // 4개 공을 원 안 랜덤 위치에 배치
     const positions = [];
     for (let i = 0; i < 4; i++) {
         let x, y, valid = false;
         let attempts = 0;
         while (!valid && attempts < 100) {
-            x = CENTER.x + (Math.random() - 0.5) * 100;
-            y = CENTER.y + (Math.random() - 0.5) * 100;
-            valid = pointInPolygon(x, y, arenaVertices);
+            const angle = Math.random() * Math.PI * 2;
+            const r = Math.random() * 80;
+            x = CENTER.x + Math.cos(angle) * r;
+            y = CENTER.y + Math.sin(angle) * r;
+            valid = pointInArena(x, y);
             // 다른 공과 거리 확인
             positions.forEach(p => {
                 if (Math.sqrt((x - p.x) ** 2 + (y - p.y) ** 2) < 30) valid = false;
@@ -730,14 +663,10 @@ function draw() {
     ctx.fillStyle = '#111';
     ctx.fillRect(0, 0, W, H);
 
-    // 클리핑 패스 설정 (도형 안에만 그리기)
+    // 클리핑 패스 설정 (원 안에만 그리기)
     ctx.save();
     ctx.beginPath();
-    ctx.moveTo(arenaVertices[0].x, arenaVertices[0].y);
-    for (let i = 1; i < arenaVertices.length; i++) {
-        ctx.lineTo(arenaVertices[i].x, arenaVertices[i].y);
-    }
-    ctx.closePath();
+    ctx.arc(CENTER.x, CENTER.y, ARENA_RADIUS, 0, Math.PI * 2);
     ctx.clip();
 
     // 그리드 셀 그리기 (클리핑된 상태)
@@ -758,15 +687,11 @@ function draw() {
 
     ctx.restore();
 
-    // 경기장 테두리
+    // 경기장 테두리 (원)
     ctx.strokeStyle = '#fff';
     ctx.lineWidth = 3;
     ctx.beginPath();
-    ctx.moveTo(arenaVertices[0].x, arenaVertices[0].y);
-    for (let i = 1; i < arenaVertices.length; i++) {
-        ctx.lineTo(arenaVertices[i].x, arenaVertices[i].y);
-    }
-    ctx.closePath();
+    ctx.arc(CENTER.x, CENTER.y, ARENA_RADIUS, 0, Math.PI * 2);
     ctx.stroke();
 
     // 완성된 도형 표시
