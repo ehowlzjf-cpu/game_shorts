@@ -79,36 +79,20 @@
         }
         #pin-counter {
             position: absolute;
-            top: 50px;
+            top: 20px;
             right: 20px;
             font-size: 24px;
             color: #fff;
             text-shadow: 0 0 10px rgba(255, 255, 255, 0.5);
         }
-        #stage-display {
+        #floor-line {
             position: absolute;
-            top: 15px;
-            left: 20px;
-            font-size: 18px;
-            color: #fff;
-            text-shadow: 0 0 10px rgba(255, 255, 255, 0.5);
-        }
-        #progress-bar {
-            position: absolute;
-            bottom: 80px;
-            left: 20px;
-            right: 20px;
-            height: 8px;
-            background: rgba(255, 255, 255, 0.2);
-            border-radius: 4px;
-            overflow: hidden;
-        }
-        #progress-fill {
-            height: 100%;
-            background: linear-gradient(90deg, #ff6b6b, #ffd93d);
-            width: 0%;
-            transition: width 0.3s ease-out;
-            border-radius: 4px;
+            bottom: 60px;
+            left: 0;
+            right: 0;
+            height: 2px;
+            background: rgba(255, 255, 255, 0.8);
+            box-shadow: 0 0 10px rgba(255, 255, 255, 0.5);
         }
         #start-screen {
             position: absolute;
@@ -149,11 +133,8 @@
         <div id="overlay">
             <div id="countdown"></div>
         </div>
-        <div id="stage-display">STAGE <span id="stage-num">1</span></div>
-        <div id="pin-counter">🎯 <span id="pin-count">0</span></div>
-        <div id="progress-bar">
-            <div id="progress-fill"></div>
-        </div>
+        <div id="pin-counter"><span id="pin-count">0</span></div>
+        <div id="floor-line"></div>
         <div id="clear-screen">
             <div id="clear-text">✨ STAGE CLEAR! ✨</div>
         </div>
@@ -171,7 +152,7 @@
         const WIDTH = 360;
         const HEIGHT = 640;
         const PIN_RADIUS = 10;
-        const BALL_RADIUS = 12;
+        const BALL_RADIUS = 18;
 
         // 스테이지별 핀 패턴
         let currentStage = 1;
@@ -390,20 +371,24 @@
             oscillator.stop(audioCtx.currentTime + 0.2);
         }
 
-        // 스테이지별 색상 테마
-        const STAGE_COLORS = [
-            { primary: '#ff6b6b', secondary: '#ffd93d' },  // 빨강-노랑
-            { primary: '#4ecdc4', secondary: '#44a08d' },  // 청록
-            { primary: '#ff9ff3', secondary: '#f368e0' },  // 핑크
-            { primary: '#54a0ff', secondary: '#5f27cd' },  // 파랑-보라
-            { primary: '#ff9f43', secondary: '#ee5a24' }   // 주황
+        // 스테이지별 색상 테마 (HSL 기반 그라데이션)
+        const STAGE_THEMES = [
+            { hueStart: 0, hueEnd: 60 },      // 빨강→노랑
+            { hueStart: 160, hueEnd: 200 },   // 청록→파랑
+            { hueStart: 280, hueEnd: 340 },   // 보라→핑크
+            { hueStart: 30, hueEnd: 80 },     // 주황→연두
+            { hueStart: 200, hueEnd: 280 }    // 파랑→보라
         ];
 
-        // 핀 색상 (스테이지별 그라데이션)
-        function getPinColor(index, total) {
-            const colors = STAGE_COLORS[(currentStage - 1) % STAGE_COLORS.length];
-            const ratio = index / total;
-            return ratio < 0.5 ? colors.primary : colors.secondary;
+        // 핀 색상 (부드러운 그라데이션)
+        function getPinColor(x, y) {
+            const theme = STAGE_THEMES[(currentStage - 1) % STAGE_THEMES.length];
+            // 위치 기반 색상 계산 (대각선 그라데이션)
+            const ratio = (x / WIDTH + y / HEIGHT) / 2;
+            const hue = theme.hueStart + (theme.hueEnd - theme.hueStart) * ratio;
+            const saturation = 70 + Math.sin(ratio * Math.PI) * 15;
+            const lightness = 55 + Math.cos(ratio * Math.PI * 2) * 10;
+            return `hsl(${hue}, ${saturation}%, ${lightness}%)`;
         }
 
         // 파티클 효과
@@ -462,17 +447,20 @@
 
             // 공에 글로우 효과
             balls.forEach(ball => {
-                const colors = STAGE_COLORS[(currentStage - 1) % STAGE_COLORS.length];
+                const theme = STAGE_THEMES[(currentStage - 1) % STAGE_THEMES.length];
+                const hue = (theme.hueStart + theme.hueEnd) / 2;
+                const glowColor = `hsl(${hue}, 80%, 60%)`;
+
                 const gradient = glowCtx.createRadialGradient(
                     ball.position.x, ball.position.y, 0,
-                    ball.position.x, ball.position.y, BALL_RADIUS * 3
+                    ball.position.x, ball.position.y, BALL_RADIUS * 2.5
                 );
-                gradient.addColorStop(0, colors.primary);
+                gradient.addColorStop(0, glowColor);
                 gradient.addColorStop(1, 'transparent');
 
                 glowCtx.fillStyle = gradient;
                 glowCtx.beginPath();
-                glowCtx.arc(ball.position.x, ball.position.y, BALL_RADIUS * 3, 0, Math.PI * 2);
+                glowCtx.arc(ball.position.x, ball.position.y, BALL_RADIUS * 2.5, 0, Math.PI * 2);
                 glowCtx.fill();
             });
         }
@@ -490,7 +478,7 @@
                     friction: 0,
                     label: 'pin',
                     render: {
-                        fillStyle: getPinColor(index, positions.length)
+                        fillStyle: getPinColor(pos.x, pos.y)
                     },
                     pinData: {
                         index: index,
@@ -503,13 +491,7 @@
             totalPins = pins.length;
             removedPins = 0;
             updatePinCounter();
-            updateStageDisplay();
             World.add(engine.world, pins);
-        }
-
-        // 스테이지 표시 업데이트
-        function updateStageDisplay() {
-            document.getElementById('stage-num').textContent = currentStage;
         }
 
         // 벽 생성 (튕기는 벽)
@@ -521,8 +503,9 @@
                 render: { fillStyle: '#2a2a4e' }
             };
 
+            const floorY = HEIGHT - 60;  // 바닥선 위치
             const walls = [
-                Bodies.rectangle(WIDTH / 2, HEIGHT + 25, WIDTH, 50, { ...baseOptions, label: 'floor' }),   // 바닥
+                Bodies.rectangle(WIDTH / 2, floorY + 25, WIDTH, 50, { ...baseOptions, label: 'floor' }),   // 바닥
                 Bodies.rectangle(-25, HEIGHT / 2, 50, HEIGHT, { ...baseOptions, label: 'wall' }),          // 왼쪽
                 Bodies.rectangle(WIDTH + 25, HEIGHT / 2, 50, HEIGHT, { ...baseOptions, label: 'wall' }),   // 오른쪽
                 Bodies.rectangle(WIDTH / 2, -25, WIDTH, 50, { ...baseOptions, label: 'ceiling' })          // 천장
@@ -534,7 +517,9 @@
         // 공 생성
         function createBall() {
             const x = WIDTH / 2 + (Math.random() - 0.5) * 100;
-            const colors = STAGE_COLORS[(currentStage - 1) % STAGE_COLORS.length];
+            const theme = STAGE_THEMES[(currentStage - 1) % STAGE_THEMES.length];
+            const hue = (theme.hueStart + theme.hueEnd) / 2;
+            const strokeColor = `hsl(${hue}, 80%, 60%)`;
 
             const ball = Bodies.circle(x, 50, BALL_RADIUS, {
                 restitution: 0.95,
@@ -543,7 +528,7 @@
                 label: 'ball',
                 render: {
                     fillStyle: '#ffffff',
-                    strokeStyle: colors.primary,
+                    strokeStyle: strokeColor,
                     lineWidth: 3
                 }
             });
@@ -571,9 +556,6 @@
         function updatePinCounter() {
             const remaining = pins.length;
             document.getElementById('pin-count').textContent = remaining;
-
-            const progress = ((totalPins - remaining) / totalPins) * 100;
-            document.getElementById('progress-fill').style.width = progress + '%';
         }
 
         // 벽 충돌 소리 (낮은 퉁 소리)
