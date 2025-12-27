@@ -316,9 +316,21 @@
             }
         }
 
+        // 오디오 컨텍스트 확인 및 resume
+        function ensureAudioReady() {
+            if (!audioCtx) {
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            }
+            if (audioCtx.state === 'suspended') {
+                audioCtx.resume();
+            }
+            return audioCtx.state === 'running';
+        }
+
         // 음 재생 (실로폰/마림바 느낌)
         function playNote(frequency) {
             if (!audioCtx) return;
+            ensureAudioReady();
 
             const oscillator = audioCtx.createOscillator();
             const gainNode = audioCtx.createGain();
@@ -359,6 +371,7 @@
         // 카운트다운 비프음
         function playBeep(high = false) {
             if (!audioCtx) return;
+            ensureAudioReady();
 
             const oscillator = audioCtx.createOscillator();
             const gainNode = audioCtx.createGain();
@@ -566,6 +579,7 @@
         // 벽 충돌 소리 (낮은 퉁 소리)
         function playBounceSound() {
             if (!audioCtx) return;
+            ensureAudioReady();
 
             const oscillator = audioCtx.createOscillator();
             const gainNode = audioCtx.createGain();
@@ -842,6 +856,13 @@
             };
             startScreen.addEventListener('click', tryStart);
             startScreen.addEventListener('touchstart', tryStart);
+
+            // iOS Safari: 화면 터치 시 오디오 resume
+            document.addEventListener('touchstart', () => {
+                if (audioCtx && audioCtx.state === 'suspended') {
+                    audioCtx.resume();
+                }
+            }, { passive: true });
         }
 
         // 페이지 로드 시 초기화
