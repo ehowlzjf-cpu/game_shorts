@@ -1,0 +1,856 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Plinko ASMR</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/matter-js/0.19.0/matter.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            background: linear-gradient(135deg, #1a1a1a 0%, #2d2d2d 50%, #3a3a3a 100%);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            overflow: hidden;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+        #game-container {
+            position: relative;
+            width: 360px;
+            height: 640px;
+            overflow: hidden;
+            box-shadow: 0 0 50px rgba(255, 255, 255, 0.15);
+        }
+        canvas {
+            display: block;
+        }
+        #overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            pointer-events: none;
+        }
+        #countdown {
+            font-size: 120px;
+            font-weight: bold;
+            color: #fff;
+            text-shadow: 0 0 30px rgba(255, 255, 255, 0.8), 0 0 60px rgba(255, 255, 255, 0.5);
+            opacity: 0;
+            transform: scale(2);
+            transition: all 0.3s ease-out;
+        }
+        #countdown.show {
+            opacity: 1;
+            transform: scale(1);
+        }
+        #clear-screen {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.8);
+            display: none;
+            justify-content: center;
+            align-items: center;
+            flex-direction: column;
+        }
+        #clear-text {
+            font-size: 60px;
+            font-weight: bold;
+            color: #ffcc00;
+            text-shadow: 0 0 30px rgba(255, 204, 0, 0.8), 0 0 60px rgba(255, 204, 0, 0.5);
+            animation: pulse 0.5s ease-in-out infinite alternate;
+        }
+        @keyframes pulse {
+            from { transform: scale(1); }
+            to { transform: scale(1.1); }
+        }
+        #pin-counter {
+            position: absolute;
+            top: 50px;
+            right: 20px;
+            font-size: 24px;
+            color: #fff;
+            text-shadow: 0 0 10px rgba(255, 255, 255, 0.5);
+        }
+        #stage-display {
+            position: absolute;
+            top: 15px;
+            left: 20px;
+            font-size: 18px;
+            color: #fff;
+            text-shadow: 0 0 10px rgba(255, 255, 255, 0.5);
+        }
+        #progress-bar {
+            position: absolute;
+            bottom: 80px;
+            left: 20px;
+            right: 20px;
+            height: 8px;
+            background: rgba(255, 255, 255, 0.2);
+            border-radius: 4px;
+            overflow: hidden;
+        }
+        #progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #ff6b6b, #ffd93d);
+            width: 0%;
+            transition: width 0.3s ease-out;
+            border-radius: 4px;
+        }
+        #start-screen {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.7);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+        #start-text {
+            font-size: 32px;
+            font-weight: bold;
+            color: #fff;
+            text-shadow: 0 0 20px rgba(255, 255, 255, 0.6);
+            animation: blink 1s ease-in-out infinite;
+        }
+        @keyframes blink {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+        #glow-layer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            opacity: 0.4;
+        }
+    </style>
+</head>
+<body>
+    <div id="game-container">
+        <canvas id="game"></canvas>
+        <div id="overlay">
+            <div id="countdown"></div>
+        </div>
+        <div id="stage-display">STAGE <span id="stage-num">1</span></div>
+        <div id="pin-counter">🎯 <span id="pin-count">0</span></div>
+        <div id="progress-bar">
+            <div id="progress-fill"></div>
+        </div>
+        <div id="clear-screen">
+            <div id="clear-text">✨ STAGE CLEAR! ✨</div>
+        </div>
+        <canvas id="glow-layer"></canvas>
+        <div id="start-screen">
+            <div id="start-text">TAP TO START</div>
+        </div>
+    </div>
+
+    <script>
+        // Matter.js 모듈
+        const { Engine, Render, World, Bodies, Body, Events, Runner } = Matter;
+
+        // 게임 설정
+        const WIDTH = 360;
+        const HEIGHT = 640;
+        const PIN_RADIUS = 10;
+        const BALL_RADIUS = 12;
+
+        // 스테이지별 핀 패턴
+        let currentStage = 1;
+        const MAX_STAGE = 5;
+
+        // 핀 패턴 생성기
+        const PIN_PATTERNS = {
+            // 기본 그리드 (더 촘촘하게)
+            grid: () => {
+                const positions = [];
+                const rows = 10;
+                const cols = 9;
+                const spacingX = WIDTH / (cols + 1);
+                const spacingY = 45;
+                const startY = 120;
+
+                for (let row = 0; row < rows; row++) {
+                    const offset = (row % 2 === 0) ? 0 : spacingX / 2;
+                    const colsInRow = (row % 2 === 0) ? cols : cols - 1;
+
+                    for (let col = 0; col < colsInRow; col++) {
+                        positions.push({
+                            x: spacingX + col * spacingX + offset,
+                            y: startY + row * spacingY
+                        });
+                    }
+                }
+                return positions;
+            },
+
+            // 다이아몬드 패턴
+            diamond: () => {
+                const positions = [];
+                const centerX = WIDTH / 2;
+                const centerY = HEIGHT / 2 - 30;
+                const layers = 6;
+
+                for (let layer = 0; layer < layers; layer++) {
+                    const points = 4 + layer * 4;
+                    const radius = 30 + layer * 40;
+
+                    for (let i = 0; i < points; i++) {
+                        const angle = (Math.PI * 2 / points) * i - Math.PI / 2;
+                        positions.push({
+                            x: centerX + Math.cos(angle) * radius,
+                            y: centerY + Math.sin(angle) * radius * 1.2
+                        });
+                    }
+                }
+                return positions.filter(p => p.y > 100 && p.y < 550);
+            },
+
+            // 하트 패턴
+            heart: () => {
+                const positions = [];
+                const centerX = WIDTH / 2;
+                const offsetY = 280;
+                const scale = 8;
+
+                for (let t = 0; t < Math.PI * 2; t += 0.15) {
+                    const x = 16 * Math.pow(Math.sin(t), 3);
+                    const y = -(13 * Math.cos(t) - 5 * Math.cos(2*t) - 2 * Math.cos(3*t) - Math.cos(4*t));
+                    positions.push({
+                        x: centerX + x * scale,
+                        y: offsetY + y * scale
+                    });
+                }
+
+                // 내부 채우기
+                for (let layer = 0.6; layer > 0.2; layer -= 0.2) {
+                    for (let t = 0; t < Math.PI * 2; t += 0.2) {
+                        const x = 16 * Math.pow(Math.sin(t), 3) * layer;
+                        const y = -(13 * Math.cos(t) - 5 * Math.cos(2*t) - 2 * Math.cos(3*t) - Math.cos(4*t)) * layer;
+                        positions.push({
+                            x: centerX + x * scale,
+                            y: offsetY + y * scale
+                        });
+                    }
+                }
+
+                return positions.filter(p => p.y > 100 && p.y < 550);
+            },
+
+            // 원형 패턴
+            circles: () => {
+                const positions = [];
+                const centerX = WIDTH / 2;
+                const centerY = HEIGHT / 2 - 20;
+
+                for (let ring = 1; ring <= 7; ring++) {
+                    const radius = ring * 35;
+                    const points = ring * 6;
+
+                    for (let i = 0; i < points; i++) {
+                        const angle = (Math.PI * 2 / points) * i + (ring % 2 === 0 ? Math.PI / points : 0);
+                        positions.push({
+                            x: centerX + Math.cos(angle) * radius,
+                            y: centerY + Math.sin(angle) * radius
+                        });
+                    }
+                }
+                return positions.filter(p => p.y > 100 && p.y < 550 && p.x > 20 && p.x < WIDTH - 20);
+            },
+
+            // 지그재그 패턴
+            zigzag: () => {
+                const positions = [];
+                const rows = 12;
+                const spacingY = 40;
+                const startY = 110;
+
+                for (let row = 0; row < rows; row++) {
+                    const cols = 8 + (row % 3);
+                    const spacingX = WIDTH / (cols + 1);
+                    const offset = (row % 2 === 0) ? 20 : -20;
+
+                    for (let col = 0; col < cols; col++) {
+                        positions.push({
+                            x: spacingX + col * spacingX + offset,
+                            y: startY + row * spacingY
+                        });
+                    }
+                }
+                return positions.filter(p => p.x > 15 && p.x < WIDTH - 15);
+            }
+        };
+
+        const PATTERN_ORDER = ['grid', 'diamond', 'heart', 'circles', 'zigzag'];
+
+        // 음계 주파수 (C4 ~ C6 펜타토닉 스케일 - 듣기 좋은 조합)
+        const FREQUENCIES = [
+            261.63, 293.66, 329.63, 392.00, 440.00,  // C4, D4, E4, G4, A4
+            523.25, 587.33, 659.25, 783.99, 880.00,  // C5, D5, E5, G5, A5
+            1046.50, 1174.66, 1318.51                // C6, D6, E6
+        ];
+
+        // 오디오 컨텍스트
+        let audioCtx = null;
+
+        // 게임 상태
+        let engine, render, runner;
+        let pins = [];
+        let balls = [];
+        let totalPins = 0;
+        let removedPins = 0;
+        let gameRunning = false;
+
+        // 오디오 초기화
+        function initAudio() {
+            if (!audioCtx) {
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            }
+            // iOS Safari는 resume 필요
+            if (audioCtx.state === 'suspended') {
+                audioCtx.resume();
+            }
+        }
+
+        // 음 재생 (실로폰/마림바 느낌)
+        function playNote(frequency) {
+            if (!audioCtx) return;
+
+            const oscillator = audioCtx.createOscillator();
+            const gainNode = audioCtx.createGain();
+            const filterNode = audioCtx.createBiquadFilter();
+
+            // 따뜻한 사인파 + 약간의 배음
+            oscillator.type = 'sine';
+            oscillator.frequency.setValueAtTime(frequency, audioCtx.currentTime);
+
+            // 부드러운 필터
+            filterNode.type = 'lowpass';
+            filterNode.frequency.setValueAtTime(2000, audioCtx.currentTime);
+
+            // ADSR 엔벨로프 (빠른 어택, 부드러운 릴리즈)
+            gainNode.gain.setValueAtTime(0, audioCtx.currentTime);
+            gainNode.gain.linearRampToValueAtTime(0.4, audioCtx.currentTime + 0.01);
+            gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.8);
+
+            oscillator.connect(filterNode);
+            filterNode.connect(gainNode);
+            gainNode.connect(audioCtx.destination);
+
+            oscillator.start(audioCtx.currentTime);
+            oscillator.stop(audioCtx.currentTime + 0.8);
+        }
+
+        // 클리어 사운드 (화음)
+        function playClearSound() {
+            if (!audioCtx) return;
+
+            // C 메이저 코드 아르페지오
+            const chord = [523.25, 659.25, 783.99, 1046.50];
+            chord.forEach((freq, i) => {
+                setTimeout(() => playNote(freq), i * 100);
+            });
+        }
+
+        // 카운트다운 비프음
+        function playBeep(high = false) {
+            if (!audioCtx) return;
+
+            const oscillator = audioCtx.createOscillator();
+            const gainNode = audioCtx.createGain();
+
+            oscillator.type = 'sine';
+            oscillator.frequency.setValueAtTime(high ? 880 : 440, audioCtx.currentTime);
+
+            gainNode.gain.setValueAtTime(0.3, audioCtx.currentTime);
+            gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.2);
+
+            oscillator.connect(gainNode);
+            gainNode.connect(audioCtx.destination);
+
+            oscillator.start(audioCtx.currentTime);
+            oscillator.stop(audioCtx.currentTime + 0.2);
+        }
+
+        // 스테이지별 색상 테마
+        const STAGE_COLORS = [
+            { primary: '#ff6b6b', secondary: '#ffd93d' },  // 빨강-노랑
+            { primary: '#4ecdc4', secondary: '#44a08d' },  // 청록
+            { primary: '#ff9ff3', secondary: '#f368e0' },  // 핑크
+            { primary: '#54a0ff', secondary: '#5f27cd' },  // 파랑-보라
+            { primary: '#ff9f43', secondary: '#ee5a24' }   // 주황
+        ];
+
+        // 핀 색상 (스테이지별 그라데이션)
+        function getPinColor(index, total) {
+            const colors = STAGE_COLORS[(currentStage - 1) % STAGE_COLORS.length];
+            const ratio = index / total;
+            return ratio < 0.5 ? colors.primary : colors.secondary;
+        }
+
+        // 파티클 효과
+        let particles = [];
+
+        function createParticles(x, y, color) {
+            for (let i = 0; i < 6; i++) {
+                particles.push({
+                    x: x,
+                    y: y,
+                    vx: (Math.random() - 0.5) * 8,
+                    vy: (Math.random() - 0.5) * 8,
+                    life: 1,
+                    color: color,
+                    size: 3 + Math.random() * 3
+                });
+            }
+        }
+
+        function updateParticles() {
+            particles = particles.filter(p => p.life > 0);
+            particles.forEach(p => {
+                p.x += p.vx;
+                p.y += p.vy;
+                p.life -= 0.05;
+                p.size *= 0.95;
+            });
+        }
+
+        function drawParticles(ctx) {
+            particles.forEach(p => {
+                ctx.save();
+                ctx.globalAlpha = p.life * 0.8;
+                ctx.fillStyle = p.color;
+                ctx.beginPath();
+                ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.restore();
+            });
+        }
+
+        // 글로우 효과 캔버스
+        let glowCanvas, glowCtx;
+
+        function initGlowLayer() {
+            glowCanvas = document.getElementById('glow-layer');
+            glowCanvas.width = WIDTH;
+            glowCanvas.height = HEIGHT;
+            glowCtx = glowCanvas.getContext('2d');
+        }
+
+        function drawGlow() {
+            if (!glowCtx) return;
+
+            glowCtx.clearRect(0, 0, WIDTH, HEIGHT);
+
+            // 공에 글로우 효과
+            balls.forEach(ball => {
+                const colors = STAGE_COLORS[(currentStage - 1) % STAGE_COLORS.length];
+                const gradient = glowCtx.createRadialGradient(
+                    ball.position.x, ball.position.y, 0,
+                    ball.position.x, ball.position.y, BALL_RADIUS * 3
+                );
+                gradient.addColorStop(0, colors.primary);
+                gradient.addColorStop(1, 'transparent');
+
+                glowCtx.fillStyle = gradient;
+                glowCtx.beginPath();
+                glowCtx.arc(ball.position.x, ball.position.y, BALL_RADIUS * 3, 0, Math.PI * 2);
+                glowCtx.fill();
+            });
+        }
+
+        // 핀 생성
+        function createPins() {
+            pins = [];
+            const patternName = PATTERN_ORDER[(currentStage - 1) % PATTERN_ORDER.length];
+            const positions = PIN_PATTERNS[patternName]();
+
+            positions.forEach((pos, index) => {
+                const pin = Bodies.circle(pos.x, pos.y, PIN_RADIUS, {
+                    isStatic: true,
+                    restitution: 1,
+                    friction: 0,
+                    label: 'pin',
+                    render: {
+                        fillStyle: getPinColor(index, positions.length)
+                    },
+                    pinData: {
+                        index: index,
+                        frequency: FREQUENCIES[index % FREQUENCIES.length]
+                    }
+                });
+                pins.push(pin);
+            });
+
+            totalPins = pins.length;
+            removedPins = 0;
+            updatePinCounter();
+            updateStageDisplay();
+            World.add(engine.world, pins);
+        }
+
+        // 스테이지 표시 업데이트
+        function updateStageDisplay() {
+            document.getElementById('stage-num').textContent = currentStage;
+        }
+
+        // 벽 생성 (튕기는 벽)
+        function createWalls() {
+            const baseOptions = {
+                isStatic: true,
+                restitution: 1,
+                friction: 0,
+                render: { fillStyle: '#2a2a4e' }
+            };
+
+            const walls = [
+                Bodies.rectangle(WIDTH / 2, HEIGHT + 25, WIDTH, 50, { ...baseOptions, label: 'floor' }),   // 바닥
+                Bodies.rectangle(-25, HEIGHT / 2, 50, HEIGHT, { ...baseOptions, label: 'wall' }),          // 왼쪽
+                Bodies.rectangle(WIDTH + 25, HEIGHT / 2, 50, HEIGHT, { ...baseOptions, label: 'wall' }),   // 오른쪽
+                Bodies.rectangle(WIDTH / 2, -25, WIDTH, 50, { ...baseOptions, label: 'ceiling' })          // 천장
+            ];
+
+            World.add(engine.world, walls);
+        }
+
+        // 공 생성
+        function createBall() {
+            const x = WIDTH / 2 + (Math.random() - 0.5) * 100;
+            const colors = STAGE_COLORS[(currentStage - 1) % STAGE_COLORS.length];
+
+            const ball = Bodies.circle(x, 50, BALL_RADIUS, {
+                restitution: 0.95,
+                friction: 0,
+                frictionAir: 0.001,
+                label: 'ball',
+                render: {
+                    fillStyle: '#ffffff',
+                    strokeStyle: colors.primary,
+                    lineWidth: 3
+                }
+            });
+
+            // 스테이지에 따라 속도 증가
+            const speedMultiplier = 1 + (currentStage - 1) * 0.15;
+            Body.setVelocity(ball, {
+                x: (Math.random() - 0.5) * 8 * speedMultiplier,
+                y: 5 * speedMultiplier
+            });
+
+            balls.push(ball);
+            World.add(engine.world, ball);
+        }
+
+        // 스테이지에 따라 공 여러 개 생성
+        function spawnBalls() {
+            const ballCount = Math.min(currentStage, 3);  // 최대 3개
+            for (let i = 0; i < ballCount; i++) {
+                setTimeout(() => createBall(), i * 300);
+            }
+        }
+
+        // UI 업데이트 (실제 pins 배열 기준)
+        function updatePinCounter() {
+            const remaining = pins.length;
+            document.getElementById('pin-count').textContent = remaining;
+
+            const progress = ((totalPins - remaining) / totalPins) * 100;
+            document.getElementById('progress-fill').style.width = progress + '%';
+        }
+
+        // 벽 충돌 소리 (낮은 퉁 소리)
+        function playBounceSound() {
+            if (!audioCtx) return;
+
+            const oscillator = audioCtx.createOscillator();
+            const gainNode = audioCtx.createGain();
+
+            oscillator.type = 'sine';
+            oscillator.frequency.setValueAtTime(150, audioCtx.currentTime);
+
+            gainNode.gain.setValueAtTime(0.2, audioCtx.currentTime);
+            gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.15);
+
+            oscillator.connect(gainNode);
+            gainNode.connect(audioCtx.destination);
+
+            oscillator.start(audioCtx.currentTime);
+            oscillator.stop(audioCtx.currentTime + 0.15);
+        }
+
+        // 충돌 처리
+        function setupCollisions() {
+            Events.on(engine, 'collisionStart', (event) => {
+                event.pairs.forEach(pair => {
+                    const { bodyA, bodyB } = pair;
+
+                    // 공과 핀의 충돌
+                    let pin = null;
+                    let ball = null;
+                    let wall = null;
+                    let floor = null;
+
+                    if (bodyA.label === 'pin' && bodyB.label === 'ball') {
+                        pin = bodyA;
+                        ball = bodyB;
+                    } else if (bodyB.label === 'pin' && bodyA.label === 'ball') {
+                        pin = bodyB;
+                        ball = bodyA;
+                    } else if ((bodyA.label === 'wall' || bodyA.label === 'ceiling') && bodyB.label === 'ball') {
+                        wall = bodyA;
+                        ball = bodyB;
+                    } else if ((bodyB.label === 'wall' || bodyB.label === 'ceiling') && bodyA.label === 'ball') {
+                        wall = bodyB;
+                        ball = bodyA;
+                    } else if (bodyA.label === 'floor' && bodyB.label === 'ball') {
+                        floor = bodyA;
+                        ball = bodyB;
+                    } else if (bodyB.label === 'floor' && bodyA.label === 'ball') {
+                        floor = bodyB;
+                        ball = bodyA;
+                    }
+
+                    // 핀 충돌
+                    if (pin && pins.includes(pin) && !pin.isRemoving) {
+                        // 중복 처리 방지
+                        pin.isRemoving = true;
+
+                        // 소리 재생
+                        playNote(pin.pinData.frequency);
+
+                        // 파티클 효과
+                        createParticles(pin.position.x, pin.position.y, pin.render.fillStyle);
+
+                        // 핀 제거 애니메이션
+                        pin.render.opacity = 0.5;
+
+                        setTimeout(() => {
+                            World.remove(engine.world, pin);
+                            pins = pins.filter(p => p !== pin);
+                            updatePinCounter();
+
+                            // 모든 핀 제거됨
+                            if (pins.length === 0) {
+                                showClear();
+                            }
+                        }, 50);
+                    }
+
+                    // 벽 충돌 - 가속도 부여
+                    if (wall && ball) {
+                        playBounceSound();
+
+                        const velocity = ball.velocity;
+                        const boostFactor = 1.3;
+                        Body.setVelocity(ball, {
+                            x: velocity.x * boostFactor,
+                            y: velocity.y * boostFactor
+                        });
+                    }
+
+                    // 바닥 충돌 - 위로 강하게 튀기
+                    if (floor && ball) {
+                        playBounceSound();
+
+                        const velocity = ball.velocity;
+                        Body.setVelocity(ball, {
+                            x: velocity.x * 1.2 + (Math.random() - 0.5) * 5,
+                            y: -Math.abs(velocity.y) * 1.8 - 5  // 위로 강하게
+                        });
+                    }
+                });
+            });
+        }
+
+        // 공 속도 유지 (너무 느려지지 않게)
+        function manageBalls() {
+            const MIN_SPEED = 3;
+            const MAX_SPEED = 15;
+
+            setInterval(() => {
+                if (!gameRunning) return;
+
+                balls.forEach(ball => {
+                    const velocity = ball.velocity;
+                    const speed = Math.sqrt(velocity.x ** 2 + velocity.y ** 2);
+
+                    // 너무 느려지면 가속
+                    if (speed < MIN_SPEED) {
+                        const boost = 1.5;
+                        Body.setVelocity(ball, {
+                            x: velocity.x * boost + (Math.random() - 0.5) * 2,
+                            y: velocity.y * boost + (Math.random() - 0.5) * 2
+                        });
+                    }
+
+                    // 너무 빠르면 감속
+                    if (speed > MAX_SPEED) {
+                        const scale = MAX_SPEED / speed;
+                        Body.setVelocity(ball, {
+                            x: velocity.x * scale,
+                            y: velocity.y * scale
+                        });
+                    }
+                });
+            }, 100);
+        }
+
+        // 클리어 화면
+        function showClear() {
+            gameRunning = false;
+            playClearSound();
+
+            // 다음 스테이지로
+            currentStage++;
+            if (currentStage > MAX_STAGE) {
+                currentStage = 1;  // 전체 클리어 후 처음부터
+            }
+
+            const clearText = document.getElementById('clear-text');
+            clearText.textContent = `✨ STAGE ${currentStage - 1} CLEAR! ✨`;
+            document.getElementById('clear-screen').style.display = 'flex';
+
+            // 2초 후 다음 스테이지
+            setTimeout(() => {
+                document.getElementById('clear-screen').style.display = 'none';
+                restartGame();
+            }, 2000);
+        }
+
+        // 카운트다운
+        async function countdown() {
+            const countdownEl = document.getElementById('countdown');
+
+            for (let i = 3; i >= 1; i--) {
+                countdownEl.textContent = i;
+                countdownEl.classList.add('show');
+                playBeep(false);
+
+                await new Promise(r => setTimeout(r, 800));
+                countdownEl.classList.remove('show');
+                await new Promise(r => setTimeout(r, 200));
+            }
+
+            countdownEl.textContent = 'GO!';
+            countdownEl.style.color = '#00ff88';
+            countdownEl.classList.add('show');
+            playBeep(true);
+
+            await new Promise(r => setTimeout(r, 500));
+            countdownEl.classList.remove('show');
+            countdownEl.style.color = '#fff';
+        }
+
+        // 게임 재시작
+        async function restartGame() {
+            // 기존 공 제거
+            balls.forEach(ball => World.remove(engine.world, ball));
+            balls = [];
+
+            // 기존 핀 제거
+            pins.forEach(pin => World.remove(engine.world, pin));
+            pins = [];
+
+            // 파티클 초기화
+            particles = [];
+
+            // 새 핀 생성
+            createPins();
+
+            // 카운트다운
+            await countdown();
+
+            // 게임 시작
+            gameRunning = true;
+            spawnBalls();
+        }
+
+        // 게임 시작 (터치 후)
+        async function startGame() {
+            document.getElementById('start-screen').style.display = 'none';
+            initAudio();
+
+            await countdown();
+            gameRunning = true;
+            spawnBalls();
+        }
+
+        // 초기화
+        function init() {
+            // Matter.js 엔진 설정 (부드러운 물리)
+            engine = Engine.create({
+                gravity: { x: 0, y: 1 },
+                positionIterations: 10,
+                velocityIterations: 8
+            });
+
+            render = Render.create({
+                element: document.getElementById('game-container'),
+                canvas: document.getElementById('game'),
+                engine: engine,
+                options: {
+                    width: WIDTH,
+                    height: HEIGHT,
+                    wireframes: false,
+                    background: 'transparent'
+                }
+            });
+
+            runner = Runner.create({
+                delta: 1000 / 120
+            });
+
+            // 게임 요소 생성
+            createWalls();
+            createPins();
+            setupCollisions();
+            manageBalls();
+
+            // 글로우 레이어 초기화
+            initGlowLayer();
+
+            // 파티클 및 글로우 렌더링 루프
+            Events.on(render, 'afterRender', () => {
+                updateParticles();
+                drawParticles(render.context);
+                drawGlow();
+            });
+
+            // 렌더링 시작
+            Render.run(render);
+            Runner.run(runner, engine);
+
+            // 터치/클릭으로 시작
+            const startScreen = document.getElementById('start-screen');
+            const tryStart = () => {
+                if (!gameRunning && startScreen.style.display !== 'none') {
+                    startGame();
+                }
+            };
+            startScreen.addEventListener('click', tryStart);
+            startScreen.addEventListener('touchstart', tryStart);
+        }
+
+        // 페이지 로드 시 초기화
+        window.onload = init;
+    </script>
+</body>
+</html>
